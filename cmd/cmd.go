@@ -2367,7 +2367,7 @@ func NewCLI() *cobra.Command {
 		RunE:   BenchmarkNPUHandler,
 		PreRunE: checkServerHeartbeat,
 	}
-	benchmarkNPUCmd.Flags().String("model", "", "Model to benchmark (required)")
+	benchmarkNPUCmd.Flags().String("model", "", "Model(s) to benchmark, comma-separated (required)")
 	benchmarkNPUCmd.Flags().Int("ctx", 512, "Context length (num_ctx)")
 	benchmarkNPUCmd.Flags().Int("predict", 128, "Max tokens to generate")
 	benchmarkNPUCmd.Flags().Int("epochs", 8, "Number of timed epochs")

@@ -12,29 +12,28 @@ import (
 	"time"
 
 	"github.com/ollama/ollama/api"
-	"github.com/ollama/ollama/x/ortrunner"
 	"github.com/spf13/cobra"
 )
 
-// BenchmarkNPUHandler runs CPU vs NPU-only benchmark comparison.
+// BenchmarkNPUHandler runs benchmark comparison across one or more models.
+// Use comma-separated model names to compare, e.g.:
+//
+//	ollama benchmark npu --model phi3:mini,dsmith111/phi3:mini-qnn
 func BenchmarkNPUHandler(cmd *cobra.Command, args []string) error {
-	modelName, _ := cmd.Flags().GetString("model")
+	modelFlag, _ := cmd.Flags().GetString("model")
 	numCtx, _ := cmd.Flags().GetInt("ctx")
 	numPredict, _ := cmd.Flags().GetInt("predict")
 	epochs, _ := cmd.Flags().GetInt("epochs")
 	warmup, _ := cmd.Flags().GetInt("warmup")
 	jsonFile, _ := cmd.Flags().GetString("json")
 
-	// Validate NPU runtime is available
-	report := ortrunner.ValidateORTDir()
-	if !report.HasQNN {
-		fmt.Println("WARNING: QNN provider not found. NPU benchmark may fail.")
-		fmt.Println("  Run 'ollama npu setup' to install the ORT GenAI runtime.")
-		fmt.Println()
+	models := strings.Split(modelFlag, ",")
+	for i := range models {
+		models[i] = strings.TrimSpace(models[i])
 	}
 
 	fmt.Println("=== Ollama NPU Benchmark ===")
-	fmt.Printf("Model:   %s\n", modelName)
+	fmt.Printf("Models:  %s\n", strings.Join(models, ", "))
 	fmt.Printf("Context: %d\n", numCtx)
 	fmt.Printf("Predict: %d\n", numPredict)
 	fmt.Printf("Epochs:  %d (warmup: %d)\n", epochs, warmup)
@@ -45,27 +44,36 @@ func BenchmarkNPUHandler(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("could not create client: %w", err)
 	}
 
-	// Run benchmark — the server automatically selects the best provider
-	// (QNN for ortgenai models, auto-detect for others).
-	// Note: provider switching requires restarting the server with different
-	// env vars. For now, benchmark the model with its default provider.
-	fmt.Println("--- Benchmark ---")
-	metrics, err := runBenchEpochs(client, modelName, numCtx, numPredict, epochs, warmup)
-	if err != nil {
-		return fmt.Errorf("benchmark failed: %w", err)
+	var results []benchResult
+
+	for _, modelName := range models {
+		fmt.Printf("--- %s ---\n", modelName)
+
+		metrics, err := runBenchEpochs(client, modelName, numCtx, numPredict, epochs, warmup)
+		if err != nil {
+			fmt.Printf("  ERROR: %v\n\n", err)
+			continue
+		}
+
+		br := benchResult{Provider: modelName, Epochs: metrics}
+		results = append(results, br)
+
+		printProfileResults(modelName, metrics)
+		fmt.Println()
+
+		// Unload model before next one
+		unloadBenchModel(client, modelName)
 	}
 
-	results := []benchResult{{Provider: "default", Epochs: metrics}}
-	printProfileResults("Default provider", metrics)
-	fmt.Println()
-
-	// Unload model
-	unloadBenchModel(client, modelName)
+	// Print comparison table if multiple models
+	if len(results) >= 2 {
+		printComparisonTable(results)
+	}
 
 	// Write JSON output
 	if jsonFile != "" {
 		data, err := json.MarshalIndent(map[string]any{
-			"model":   modelName,
+			"models":  models,
 			"ctx":     numCtx,
 			"predict": numPredict,
 			"epochs":  epochs,
@@ -97,6 +105,14 @@ type epochMetrics struct {
 type benchResult struct {
 	Provider string         `json:"provider"`
 	Epochs   []epochMetrics `json:"epochs"`
+}
+
+// safeTokPerSec computes tokens/sec, returning 0 if duration is zero or negative.
+func safeTokPerSec(tokens int, dur time.Duration) float64 {
+	if dur <= 0 || tokens <= 0 {
+		return 0
+	}
+	return float64(tokens) / dur.Seconds()
 }
 
 // Prompt word list for varied prompts per epoch.
@@ -244,11 +260,15 @@ func printProfileResults(name string, metrics []epochMetrics) {
 
 	n := float64(len(metrics))
 	avgTTFT := float64(totalTTFT.Milliseconds()) / n
-	avgPrefillTokS := float64(totalPrefillTok) / (float64(totalPrefillDur.Nanoseconds())+1e-12) * 1e9
-	avgDecodeTokS := float64(totalGenTok) / (float64(totalGenDur.Nanoseconds())+1e-12) * 1e9
+	avgPrefillTokS := safeTokPerSec(totalPrefillTok, totalPrefillDur)
+	avgDecodeTokS := safeTokPerSec(totalGenTok, totalGenDur)
 
 	fmt.Printf("  Avg TTFT:       %.0f ms\n", avgTTFT)
-	fmt.Printf("  Avg prefill:    %.1f tok/s\n", avgPrefillTokS)
+	if avgPrefillTokS > 0 {
+		fmt.Printf("  Avg prefill:    %.1f tok/s\n", avgPrefillTokS)
+	} else {
+		fmt.Printf("  Avg prefill:    (included in TTFT)\n")
+	}
 	fmt.Printf("  Avg decode:     %.1f tok/s\n", avgDecodeTokS)
 	fmt.Printf("  Load duration:  %v\n", metrics[0].LoadDuration)
 }
@@ -283,8 +303,8 @@ func printComparisonTable(results []benchResult) {
 		n := float64(len(r.Epochs))
 		avgs[i] = avg{
 			ttft:       float64(totalTTFT.Milliseconds()) / n,
-			prefillTok: float64(totalPrefillTok) / (float64(totalPrefillDur.Nanoseconds()) + 1e-12) * 1e9,
-			decodeTok:  float64(totalGenTok) / (float64(totalGenDur.Nanoseconds()) + 1e-12) * 1e9,
+			prefillTok: safeTokPerSec(totalPrefillTok, totalPrefillDur),
+			decodeTok:  safeTokPerSec(totalGenTok, totalGenDur),
 		}
 	}
 
@@ -296,7 +316,11 @@ func printComparisonTable(results []benchResult) {
 
 	fmt.Printf("%-25s", "Avg prefill (tok/s)")
 	for _, a := range avgs {
-		fmt.Printf("%-20.1f", a.prefillTok)
+		if a.prefillTok > 0 {
+			fmt.Printf("%-20.1f", a.prefillTok)
+		} else {
+			fmt.Printf("%-20s", "(in TTFT)")
+		}
 	}
 	fmt.Println()
 

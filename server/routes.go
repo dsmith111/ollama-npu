@@ -1328,6 +1328,16 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 		return resp, nil
 	}
 
+	// For ORT GenAI models, ModelPath is a directory — skip GGUF data loading
+	if m.Config.ModelFormat == "ortgenai" || m.Config.ModelFormat == "onnx" || m.Config.ModelFormat == "genai-qnn" {
+		resp.ModelInfo = map[string]any{
+			"general.type":       m.Config.ModelFormat,
+			"general.file_type":  m.Config.FileType,
+			"general.family":     m.Config.ModelFamily,
+		}
+		return resp, nil
+	}
+
 	kvData, tensors, err := getModelData(m.ModelPath, req.Verbose)
 	if err != nil {
 		return nil, err
