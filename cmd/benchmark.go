@@ -107,9 +107,11 @@ type benchResult struct {
 	Epochs   []epochMetrics `json:"epochs"`
 }
 
-// safeTokPerSec computes tokens/sec, returning 0 if duration is zero or negative.
+// safeTokPerSec computes tokens/sec, returning 0 if duration is too small to be meaningful.
+// Some runners (ORT GenAI) report near-zero prompt eval duration because prefill
+// is folded into graph execution and reflected in TTFT instead.
 func safeTokPerSec(tokens int, dur time.Duration) float64 {
-	if dur <= 0 || tokens <= 0 {
+	if dur < time.Millisecond || tokens <= 0 {
 		return 0
 	}
 	return float64(tokens) / dur.Seconds()

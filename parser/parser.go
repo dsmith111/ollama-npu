@@ -295,6 +295,10 @@ func filesForModel(path string) ([]string, error) {
 	} else if onnx, _ := glob(filepath.Join(path, "*.onnx"), ""); len(onnx) > 0 {
 		// ORT GenAI model: *.onnx graphs + QNN context binary caches (*.bin)
 		files = append(files, onnx...)
+		// Include ONNX external data files (e.g. model.onnx.data, model.onnx.data_00000)
+		if data, _ := glob(filepath.Join(path, "*.onnx.data*"), ""); len(data) > 0 {
+			files = append(files, data...)
+		}
 		if bins, _ := glob(filepath.Join(path, "*.bin"), ""); len(bins) > 0 {
 			files = append(files, bins...)
 		}

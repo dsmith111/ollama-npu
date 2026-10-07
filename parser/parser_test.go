@@ -1083,6 +1083,52 @@ func TestFilesForModel(t *testing.T) {
 			expectErrType: ErrModelNotFound,
 		},
 		{
+			name: "onnx model with external data files",
+			setup: func(dir string) error {
+				files := map[string][]byte{
+					"model.onnx":        []byte("dummy onnx"),
+					"model.onnx.data":   {0, 1, 2, 3},
+					"genai_config.json": []byte("{}"),
+					"tokenizer.json":    []byte("{}"),
+				}
+				for name, content := range files {
+					if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			wantFiles: []string{
+				"model.onnx",
+				"model.onnx.data",
+				"genai_config.json",
+				"tokenizer.json",
+			},
+		},
+		{
+			name: "onnx model with sharded external data files",
+			setup: func(dir string) error {
+				files := map[string][]byte{
+					"model.onnx":            []byte("dummy onnx"),
+					"model.onnx.data_00000": {0, 1},
+					"model.onnx.data_00001": {2, 3},
+					"genai_config.json":     []byte("{}"),
+				}
+				for name, content := range files {
+					if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			wantFiles: []string{
+				"model.onnx",
+				"model.onnx.data_00000",
+				"model.onnx.data_00001",
+				"genai_config.json",
+			},
+		},
+		{
 			name: "invalid content type for pytorch model",
 			setup: func(dir string) error {
 				// Create pytorch model file with wrong content type (text instead of zip)
