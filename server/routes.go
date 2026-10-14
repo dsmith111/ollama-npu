@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -167,6 +168,14 @@ func (s *Server) modelOptionsWithEmbeddingBatchDefault(model *Model, requestOpts
 
 	if model != nil && model.DraftPath == "" && !draftNumPredictSet {
 		opts.DraftNumPredict = 0
+	}
+
+	if model != nil && model.IsORTGenAI() && usesAutomaticNumCtx(model, requestOpts) {
+		config, err := readORTGenAIConfig(filepath.Join(model.ModelPath, "genai_config.json"))
+		if err != nil {
+			return api.Options{}, err
+		}
+		opts.NumCtx = min(opts.NumCtx, config.contextLength)
 	}
 
 	return opts, nil

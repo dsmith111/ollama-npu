@@ -75,6 +75,7 @@ type Scheduler struct {
 	// one model at a time but new requests to models that already loaded can
 	// happen in parallel
 	activeLoading llm.LlamaServer
+	ortLoadCancel context.CancelFunc
 	loaded        map[string]*runnerRef
 
 	loadFn          func(req *LlmRequest, systemInfo ml.SystemInfo, gpus []ml.DeviceInfo, requireFull bool) bool
@@ -284,7 +285,8 @@ func (s *Scheduler) Run(ctx context.Context) {
 }
 
 func (s *Scheduler) processPending(ctx context.Context) {
-	maxRunners := envconfig.MaxRunners()
+	configuredMaxRunners := envconfig.MaxRunners()
+	maxRunners := configuredMaxRunners
 
 	for {
 		select {
@@ -308,6 +310,11 @@ func (s *Scheduler) processPending(ctx context.Context) {
 			}
 
 			for {
+				runnerLimit := maxRunners
+				if configuredMaxRunners == 0 && pending.ortOptions != nil {
+					// QNN shares system memory and has no native VRAM fit estimator.
+					runnerLimit = 1
+				}
 				var runnerToExpire *runnerRef
 				pendingKey := schedulerModelKey(pending.model)
 				s.loadedMu.Lock()
@@ -329,7 +336,7 @@ func (s *Scheduler) processPending(ctx context.Context) {
 						pending.useLoadedRunner(runner, s.finishedReqCh)
 						break
 					}
-				} else if maxRunners > 0 && loadedCount >= int(maxRunners) {
+				} else if runnerLimit > 0 && loadedCount >= int(runnerLimit) {
 					slog.Debug("max runners achieved, unloading one to make room", "runner_count", loadedCount)
 					runnerToExpire = s.findRunnerToUnload()
 				} else {
@@ -594,7 +601,18 @@ func (s *Scheduler) load(req *LlmRequest, systemInfo ml.SystemInfo, gpus []ml.De
 	if llama == nil {
 		var err error
 		if req.ortOptions != nil {
-			llama, err = s.newORTServerFn(req.ctx, *req.ortOptions)
+			loadCtx, cancel := context.WithCancel(req.ctx)
+			s.ortLoadCancel = cancel
+			s.loadedMu.Unlock()
+			llama, err = s.newORTServerFn(loadCtx, *req.ortOptions)
+			s.loadedMu.Lock()
+			s.ortLoadCancel = nil
+			if err == nil && loadCtx.Err() != nil {
+				s.loadedMu.Unlock()
+				err = errors.Join(loadCtx.Err(), llama.Close())
+				s.loadedMu.Lock()
+			}
+			cancel()
 		} else if !req.model.IsMLX() {
 			var loadErr error
 			f, loadErr = llm.LoadModel(req.model.ModelPath, 1024, req.model.ModelShardPaths...)
@@ -1782,6 +1800,10 @@ func (s *Scheduler) findRunnerToUnload() *runnerRef {
 func (s *Scheduler) unloadAllRunners() {
 	s.loadedMu.Lock()
 	defer s.loadedMu.Unlock()
+
+	if s.ortLoadCancel != nil {
+		s.ortLoadCancel()
+	}
 
 	if s.activeLoading != nil {
 		slog.Debug("shutting down currently loading runner")

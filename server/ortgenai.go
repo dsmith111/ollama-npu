@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/envconfig"
@@ -17,6 +18,20 @@ import (
 )
 
 const MediaTypeORTGenAI = "application/vnd.ollama.image.ortgenai"
+
+var verifiedORTFiles = struct {
+	sync.Mutex
+	files map[string]verifiedORTFile
+}{files: make(map[string]verifiedORTFile)}
+
+type verifiedORTFile struct {
+	info   os.FileInfo
+	digest string
+}
+
+func sameORTFile(a, b os.FileInfo) bool {
+	return os.SameFile(a, b) && a.Mode() == b.Mode() && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+}
 
 func convertFromORTGenAI(ctx context.Context, files map[string]string, fn func(api.ProgressResponse)) ([]*modelLayer, error) {
 	if err := validateCreateFiles(files); err != nil {
@@ -120,6 +135,16 @@ func verifyORTGenAIFile(filename string, layer manifest.Layer, dst io.Writer) er
 	if !info.Mode().IsRegular() || info.Size() != layer.Size {
 		return fmt.Errorf("%w: artifact %q is not a regular file of size %d", errInvalidORTGenAI, layer.Name, layer.Size)
 	}
+	// Blobs and derived assets are immutable within Ollama. Rehash on any file
+	// identity/metadata change, but do not reread gigabytes on every API request.
+	if dst == nil && layer.Size >= 1<<20 {
+		verifiedORTFiles.Lock()
+		verified, ok := verifiedORTFiles.files[filename]
+		verifiedORTFiles.Unlock()
+		if ok && verified.digest == layer.Digest && sameORTFile(info, verified.info) {
+			return nil
+		}
+	}
 	f, err := os.Open(filename)
 	if err != nil {
 		return err
@@ -143,6 +168,21 @@ func verifyORTGenAIFile(filename string, layer manifest.Layer, dst io.Writer) er
 	}
 	if n != layer.Size || fmt.Sprintf("sha256:%x", hash.Sum(nil)) != layer.Digest {
 		return fmt.Errorf("%w: SHA256 mismatch for %q", errInvalidORTGenAI, layer.Name)
+	}
+	after, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !sameORTFile(opened, after) {
+		return fmt.Errorf("%w: artifact %q changed during hashing", errInvalidORTGenAI, layer.Name)
+	}
+	if dst == nil && layer.Size >= 1<<20 {
+		verifiedORTFiles.Lock()
+		if len(verifiedORTFiles.files) >= 1024 {
+			clear(verifiedORTFiles.files)
+		}
+		verifiedORTFiles.files[filename] = verifiedORTFile{info: after, digest: layer.Digest}
+		verifiedORTFiles.Unlock()
 	}
 	return nil
 }

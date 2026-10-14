@@ -214,9 +214,10 @@ func TestORTSchedulerUsesNormalLifecycle(t *testing.T) {
 	s := InitScheduler(ctx)
 	mock := &mockLlm{modelPath: "ORT bundle"}
 	s.newORTServerFn = func(requestCtx context.Context, _ ortrunner.ClientOptions) (llm.LlamaServer, error) {
-		if requestCtx != ctx {
-			t.Fatal("request context was not forwarded")
+		if requestCtx.Done() == nil {
+			t.Fatal("request cancellation was not forwarded")
 		}
+
 		return mock, nil
 	}
 	req := &LlmRequest{

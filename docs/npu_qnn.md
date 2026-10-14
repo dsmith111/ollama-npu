@@ -39,6 +39,24 @@ Do not overwrite or terminate an existing installation silently.
 .\ollama.exe debug npu
 ```
 
+For offline acquisition, use `npu setup --package-dir C:\approved-packages`.
+The directory must contain the exact approved, lowercase package-ID/version
+`.nupkg` filenames; hashes are checked before extraction. `--json` emits a
+versioned report for setup, doctor and debug commands.
+
+An old manually assembled runtime may have correct DLLs but lack the new
+integrity manifest or license inventory. It is not silently replaced, including
+with `--force`. Select a fresh directory and use it consistently:
+
+```powershell
+.\ollama.exe npu setup --provider qnn --dir C:\runtimes\ollama-qnn
+$env:OLLAMA_ORT_PATH = 'C:\runtimes\ollama-qnn'
+.\ollama.exe npu doctor --json
+```
+
+`--validate-only` makes no installation changes. `--force` revalidates an
+immutable installation; it does not overwrite native libraries in use.
+
 The supported consumer runtime path does not require Python, Olive or the QNN
 SDK. Model production is a separate workflow.
 
@@ -73,6 +91,25 @@ QNN decoder pipelines may include portable embedding/head graphs alongside
 compiled context graphs. The actual config references determine the required
 assets; a nonzero `.bin` beside an invalid ONNX wrapper is not a usable model.
 Compiled target assets must be validated on compatible hardware.
+
+### Text generation controls
+
+The runner forwards temperature, top-p/top-k, seed, stop strings, repetition
+penalty/window, context and prediction limit. Explicit zero values are preserved.
+`num_predict=-1` generates up to the available context; it does not enlarge a
+compiled context. A zero prediction limit performs no native generation.
+Automatic context is bounded by the bundle; explicitly oversized context fails.
+
+Media, embeddings, structured output, logprobs, min-p, nondefault typical-p,
+presence/frequency penalties and unsupported context-shifting controls are not
+silently approximated. Text chat requires the correct Ollama template.
+
+Requests are serialized within each child because the native API is not thread
+safe. With no explicit loaded-model limit, ORT requests use a conservative
+one-resident-model limit; ordinary GGUF keeps its upstream automatic policy.
+An explicit `OLLAMA_MAX_LOADED_MODELS` overrides that conservative limit.
+Cancellation retires the child when needed, so the next request may require a
+cold reload.
 
 ## Publishing and pulling
 
@@ -134,6 +171,34 @@ Hardware qualification must include correct output, context/options, streaming,
 client disconnect/cancellation, unload/reload, provider failure and ordinary
 CPU/GPU regression checks. Retain exact source, binary, model, runtime and driver
 identities. Hosted unit tests do not exercise an NPU.
+
+### October 13 hardware check
+
+The reconciled fork ran a freshly acquired, hash-verified
+GenAI QNN `0.12.2` / ORT QNN `1.24.1` runtime on Snapdragon X Elite X1E78100.
+The existing compiled Phi-3 bundle passed 20 deterministic requests across
+three simple prompts, native and OpenAI chat, stop/length/repetition controls,
+explicit unsupported requests, disconnect/reload and CPU GGUF switching.
+These are 42 local checks, not broad model-quality or multi-device certification.
+The compiled decoder uses QNN; CPU embedding/head stages are intentional.
+
+In the final short-prompt run, warm HTTP time had a median of about 0.39 seconds
+(19 samples, 0.37-0.42 seconds); cold load plus generation was about 20 seconds.
+An earlier run had a 0.34-second warm median and a 23-second cold request.
+This is not an
+equivalent-weights CPU/NPU performance comparison or an energy measurement.
+The warm path avoids rehashing multi-gigabyte immutable assets on every lookup:
+verified large files are memoized in-process by file identity and metadata.
+Changed files and copied assets are SHA256-checked; this is not protection
+against a privileged local process deliberately rewriting bytes and timestamps.
+
+Focused tests/build/vet pass and the desktop UI has 220 passing tests. Full
+Windows ARM64 Go tests/vet still encounter upstream desktop/tree-sitter compiler
+limitations, Windows symlink privileges and permission-mode tests. Do not
+interpret this qualification as full-suite-green or a signed consumer installer.
+Full vet also reports existing unsafe-pointer warnings outside the scoped
+packages. Public registry round-trips, clean-machine installation and other
+devices/backends remain release gates.
 
 ## GGUF/Hexagon is a separate route
 

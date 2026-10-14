@@ -11,9 +11,10 @@ import (
 )
 
 type ortGenAIConfig struct {
-	filenames    []string
-	providers    []string
-	immutableDML bool
+	contextLength int
+	filenames     []string
+	providers     []string
+	immutableDML  bool
 }
 
 func readORTGenAIConfig(filename string) (ortGenAIConfig, error) {
@@ -52,6 +53,7 @@ func readORTGenAIConfig(filename string) (ortGenAIConfig, error) {
 	if m.Type == "" || m.ContextLength <= 0 || m.ContextLength > math.MaxInt32 || m.VocabSize <= 0 || m.VocabSize > math.MaxInt32 {
 		return result, fmt.Errorf("model.type, positive int32 context_length and vocab_size are required")
 	}
+	result.contextLength = int(m.ContextLength)
 	tokens := []int32{m.Pad}
 	if len(m.EOS) > 0 {
 		var eos []int32

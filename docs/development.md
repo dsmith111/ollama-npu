@@ -102,6 +102,18 @@ on Windows ARM64 Snapdragon devices. See [NPU/QNN setup](npu_qnn.md) for the
 runtime, model and CGo requirements. It is separate from the ordinary GGUF
 CPU/GPU backends; DirectML GPU support does not imply NPU support.
 
+For a native-only MSVC ARM64 development build, use the supported overrides:
+
+```powershell
+cmake -B build . -DGGML_NATIVE=ON -DGGML_CPU_ALL_VARIANTS=OFF
+cmake --build build --config Release --parallel 2
+```
+
+This builds for the local CPU, not a portable all-CPU-variants release. A
+Go-only build still needs the matching native payload in an ordinary installed
+layout. A nonstandard CMake output directory is not automatically a runtime
+search path.
+
 ## Linux
 
 Additional prerequisites:
