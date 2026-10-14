@@ -1,127 +1,156 @@
-# ORT GenAI / QNN Model Support
+# Snapdragon NPU models in this Ollama fork
 
-Ollama supports packaging and running ORT GenAI models natively. This enables
-Snapdragon NPU inference via the QNN execution provider without manual DLL
-copying or model folder management.
+This fork adds an experimental ONNX Runtime GenAI runner for model bundles
+prepared for Qualcomm QNN/HTP on Windows ARM64. It is not a universal ONNX
+importer, a model converter, or a claim that every NPU supports DirectML.
 
-## Model Format
+The normal Ollama HTTP endpoint and model commands remain the application
+interface. The ORT runner is a private child process, not a second user-facing
+server.
 
-ORT GenAI models use `model_format: "ortgenai"` in their Ollama config. The
-model directory typically contains:
+## Support boundary
 
-```
-model-dir/
-├── genai_config.json          # ORT GenAI configuration (required)
-├── embeddings.onnx            # ONNX graph files (at least one required)
-├── lm_head.onnx
-├── context_ctx.onnx           # QNN context binary caches (optional)
-├── iterator_ctx.onnx
-├── tokenizer.json             # Tokenizer (at least one required)
-├── tokenizer.model            # SentencePiece tokenizer (alternative)
-├── tokenizer_config.json      # Tokenizer config
-├── special_tokens_map.json    # Special tokens
-└── chat_template.jinja        # Chat template (optional)
-```
+- Target: Windows 11 ARM64 on Snapdragon, with a compatible Qualcomm NPU driver.
+- Runtime: the pinned ORT GenAI QNN and ORT QNN packages selected by
+  `ollama npu setup`. Do not mix unrelated runtime DLL versions.
+- Model: a complete, compatible ORT GenAI bundle, including
+  `genai_config.json`, every referenced graph/context/weight file, and tokenizer
+  assets.
+- Model architecture, quantization, compiled context dimensions and target
+  compatibility are properties of the bundle. Renaming a model to `qnn` does not
+  make it NPU-compatible.
+- Text inference is the initial scope. Tool use, structured output, vision and
+  embeddings must not be assumed supported merely because a model imports.
 
-### Required Files
+Hardware detection and DLL loading are prerequisites, not proof that an
+inference request ran on the NPU. Likewise, a CPU/GPU completion is not QNN
+validation.
 
-- At least one `*.onnx` file (model graphs)
-- `genai_config.json` (ORT GenAI runtime configuration)
-- `tokenizer.json` or `tokenizer.model` (tokenizer)
+## Runtime setup
 
-## Creating a Model
+Use the fork executable consistently for setup, serving and model commands.
+Check that a stock Ollama service is not already occupying the chosen port.
+Do not overwrite or terminate an existing installation silently.
 
-Given an ORT GenAI model directory, create a `Modelfile`:
-
-```
-FROM ./path/to/onnx-model-dir
-```
-
-Then run:
-
-```sh
-ollama create myuser/phi3:mini-qnn -f Modelfile
+```powershell
+.\ollama.exe npu setup --provider qnn
+.\ollama.exe npu doctor
+.\ollama.exe debug ortgenai
+.\ollama.exe debug npu
 ```
 
-Ollama automatically detects the ORT GenAI format when it finds `.onnx` files
-alongside `genai_config.json`. All files are stored as blobs in the standard
-Ollama model store.
+The supported consumer runtime path does not require Python, Olive or the QNN
+SDK. Model production is a separate workflow.
 
-## Pushing and Pulling
+For a separately acquired compatible runtime directory, `OLLAMA_ORT_PATH` can
+select the native assets. It must contain matching ARM64 libraries and their
+required dependencies. Do not copy random DLLs from Edge, Office, another
+machine, or an unrelated vendor package.
 
-Once created, the model can be pushed and pulled like any other Ollama model:
+## Importing a model
 
-```sh
-ollama push myuser/phi3:mini-qnn
-ollama pull myuser/phi3:mini-qnn
+Acquire a model that is explicitly prepared for the desired execution provider
+and target. Review its source/model license and redistribution restrictions.
+Neither an arbitrary HF repository nor an arbitrary GGUF can be loaded by this
+ORT runner.
+
+Create a Modelfile next to the bundle:
+
+```text
+FROM .\model
 ```
 
-When pulled on another machine, Ollama automatically reconstructs the model
-directory from the stored blob layers. No manual file management is needed.
+Add the model's correct Ollama `TEMPLATE`, parameters and stop strings when
+needed. A `chat_template.jinja` bundled as a model asset is not automatically an
+Ollama Go template. Do not guess role tokens.
 
-## Running
-
-```sh
-ollama run myuser/phi3:mini-qnn
+```powershell
+.\ollama.exe create my-model:qnn -f .\Modelfile
+.\ollama.exe run my-model:qnn
 ```
 
-The scheduler automatically routes `ortgenai` models to the ORT GenAI runner.
-Ensure the ORT GenAI runtime is installed:
+QNN decoder pipelines may include portable embedding/head graphs alongside
+compiled context graphs. The actual config references determine the required
+assets; a nonzero `.bin` beside an invalid ONNX wrapper is not a usable model.
+Compiled target assets must be validated on compatible hardware.
 
-```sh
-ollama npu setup
+## Publishing and pulling
+
+The fork stores ORT assets as named layers in Ollama's content-addressed model
+store. Users of a compatible fork should be able to pull a qualified published
+model and use it through their usual Ollama application.
+
+Publishing is an explicit operation requiring an authorized registry namespace
+and redistribution rights:
+
+```powershell
+.\ollama.exe cp my-model:qnn myuser/my-model:qnn
+.\ollama.exe push myuser/my-model:qnn
 ```
 
-This downloads and installs the required ONNX Runtime and GenAI DLLs for
-Snapdragon QNN/HTP inference.
+Do not treat a local create or a successful upload alone as distribution
+certification. Verify a clean pull, intact assets, runtime compatibility and
+generation on another compatible profile before promoting a model.
 
-## Runtime Dependencies
+Stock Ollama does not gain the ORT runner by pulling an ORT model tag. Public
+registry acceptance and target compatibility are separate from local packaging.
 
-ORT GenAI NPU inference requires:
+## Troubleshooting
 
-- **Windows arm64** (Snapdragon)
-- ORT GenAI runtime DLLs (installed via `ollama npu setup`)
-- QNN SDK transport libraries (typically pre-installed on Snapdragon devices)
+| Symptom | Check |
+| --- | --- |
+| Unsupported platform or runtime architecture | Run native Windows ARM64 Ollama and install matching assets |
+| Missing/corrupt runtime | Run setup/doctor; verify the selected package and dependency set |
+| Provider or backend fails to load | Check runtime versions, QNN/HTP dependencies and OEM driver |
+| Model load fails | Check graph/config references, context binaries, tokenizer and compiled target |
+| Requested setting is rejected | Use the supported option set; do not assume all llama.cpp options apply |
+| Prompt exceeds context | Use the bundle's qualified context, not a larger guessed `num_ctx` |
+| Chat exposes role tokens or produces poor output | Verify tokenizer, template and source/quantization quality |
+| GPU supports DML but NPU does not | This is not unusual on Snapdragon; QNN/HTP is a different path |
 
-### Diagnostics
+Do not use a benchmark label or a Task Manager graph as sole placement proof.
+Record the requested provider, loaded model/runtime and actual provider/backend
+execution evidence.
 
-```sh
-ollama npu doctor    # Full health check
-ollama debug npu     # NPU adapter information
-ollama debug ortgenai # ORT GenAI DLL diagnostics
+## Development and qualification
+
+See [development](development.md) for the current upstream native build. The
+fork's ORT bindings additionally require a working CGo compiler. On a developer
+machine that already has the local ARM64 compiler wrappers:
+
+```powershell
+$env:CGO_ENABLED = '1'
+$env:CC = (Resolve-Path '.\_tools\cgo-clang.exe').Path
+$env:CXX = (Resolve-Path '.\_tools\cgo-clang++.exe').Path
+$env:CGO_LDFLAGS = '-ladvapi32'
+go build .
+go test .\parser .\server .\cmd .\x\ortrunner\...
 ```
 
-## Benchmarking
+Those local binaries are not a portable installer or a substitute for a
+documented clean build environment.
 
-Compare CPU vs NPU performance:
+Hardware qualification must include correct output, context/options, streaming,
+client disconnect/cancellation, unload/reload, provider failure and ordinary
+CPU/GPU regression checks. Retain exact source, binary, model, runtime and driver
+identities. Hosted unit tests do not exercise an NPU.
 
-```sh
-ollama benchmark npu --model myuser/phi3:mini-qnn --ctx 512 --predict 128
-```
+## GGUF/Hexagon is a separate route
 
-## Technical Details
+Current upstream llama.cpp has a Snapdragon Hexagon backend that can execute
+compatible GGUF without an ORT/QNN model conversion. That does not make a QAIRT
+bundle, an ORT model and a GGUF interchangeable.
 
-### Blob Storage
+The Windows developer build instructions require Hexagon SDK components and
+trusted signatures for DSP operation libraries. This project must not require
+ordinary users to disable Secure Boot or enable test-signing as its supported
+installation workflow. A signed, compatible, hardware-qualified backend is
+required before advertising seamless GGUF/NPU support.
 
-Each file in the ORT GenAI directory is stored as a separate blob in the Ollama
-model store with media type `application/vnd.ollama.image.ortgenai`. The
-original filename is preserved in the layer's `name` field.
+## Historical results
 
-### Directory Materialization
-
-When loading an ortgenai model, Ollama reconstructs the model directory by
-symlinking (or copying) blobs into a cache directory at:
-
-```
-$OLLAMA_MODELS/ortgenai/<digest>/
-```
-
-This directory is passed to the ORT GenAI runner as the model path.
-
-### Model Config
-
-The `ConfigV2` for ortgenai models sets:
-
-- `model_format: "ortgenai"`
-- `file_type: "onnx"`
-- `capabilities: ["completion"]`
+Local March 2026 runs on Snapdragon X Elite demonstrate successful QNN
+completions; selected warm samples reported roughly 10-12 tokens/s and
+1.8-1.9 seconds TTFT. They used different artifacts/settings from later source
+changes. They are historical evidence, not current performance guarantees or
+an accelerator-only comparison with equivalent weights.

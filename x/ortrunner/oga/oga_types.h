@@ -14,5 +14,7 @@ typedef struct OgaGeneratorParams OgaGeneratorParams;
 typedef struct OgaTokenizer OgaTokenizer;
 typedef struct OgaTokenizerStream OgaTokenizerStream;
 typedef struct OgaSequences OgaSequences;
+typedef struct OgaTensor OgaTensor;
+typedef enum OgaElementType { OgaElementType_undefined, OgaElementType_float32 } OgaElementType;
 
 #endif // OGA_TYPES_H

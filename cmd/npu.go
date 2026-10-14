@@ -3,221 +3,109 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
-	"os"
-	"strings"
+	"runtime"
 
 	"github.com/ollama/ollama/discover/dxcore"
-	"github.com/ollama/ollama/x/ortrunner"
-	"github.com/ollama/ollama/x/ortrunner/oga"
-	"github.com/ollama/ollama/x/ortrunner/runtime"
+	ortruntime "github.com/ollama/ollama/x/ortrunner/runtime"
 	"github.com/spf13/cobra"
 )
 
-// NPUSetupHandler installs the ORT GenAI runtime for NPU inference.
 func NPUSetupHandler(cmd *cobra.Command, args []string) error {
-	provider, _ := cmd.Flags().GetString("provider")
-	force, _ := cmd.Flags().GetBool("force")
-	printPath, _ := cmd.Flags().GetBool("print-path")
-	validateOnly, _ := cmd.Flags().GetBool("validate-only")
-
+	report := newNPUDiagnostic("npu setup")
+	dir := diagnosticString(cmd, "dir")
+	if dir == "" {
+		dir = ortruntime.InstallDir()
+	}
+	report.Dir = dir
+	printPath := diagnosticBool(cmd, "print-path")
+	validateOnly := diagnosticBool(cmd, "validate-only")
+	if len(args) != 0 || printPath && validateOnly || diagnosticString(cmd, "package-dir") != "" && (printPath || validateOnly) {
+		return finishNPUDiagnostic(cmd, report, "invalid_arguments", errors.New("setup accepts no positional arguments; --print-path, --validate-only and --package-dir cannot be combined"))
+	}
 	if printPath {
-		dir := runtime.DefaultInstallDir()
 		if dir == "" {
-			return fmt.Errorf("unable to determine install directory")
+			return finishNPUDiagnostic(cmd, report, "path_unavailable", errors.New("unable to determine installation directory"))
 		}
-		fmt.Println(dir)
-		return nil
+		if !diagnosticBool(cmd, "json") {
+			fmt.Fprintln(cmd.OutOrStdout(), dir)
+			return nil
+		}
+		report.Status = "path_only"
+		return finishNPUDiagnostic(cmd, report, "", nil)
 	}
-
+	report.untestedInference()
 	if validateOnly {
-		report := ortrunner.ValidateORTDir()
-		printValidationReport(report)
-		return nil
-	}
-
-	fmt.Println("=== Ollama NPU Setup ===")
-	fmt.Println()
-
-	// Platform check
-	fmt.Print("Checking platform... ")
-	result := dxcore.Probe()
-	if result.NPUCount > 0 {
-		fmt.Println("OK (NPU detected)")
-		for _, a := range result.Adapters {
-			if a.IsNPU {
-				fmt.Printf("  NPU: %s\n", a.Description)
-			}
+		err := inspectNPURuntime(cmd.Context(), dir, &report)
+		if err == nil {
+			report.Status = "files_verified"
 		}
-	} else {
-		fmt.Println("WARNING: No NPU detected")
-		fmt.Println("  Setup will continue, but NPU inference may not work on this device.")
+		return finishNPUDiagnostic(cmd, report, "runtime_validation_failed", err)
 	}
-	fmt.Println()
-
-	// Install runtime
-	fmt.Println("Installing ORT GenAI runtime...")
-	installResult, err := runtime.Install(runtime.InstallConfig{
-		Provider: provider,
-		Force:    force,
+	result, err := ortruntime.SetupContext(cmd.Context(), ortruntime.Config{
+		Provider: diagnosticString(cmd, "provider"), Force: diagnosticBool(cmd, "force"),
+		Dir: dir, PackageDir: diagnosticString(cmd, "package-dir"),
 	})
+	report.Installation = result
+	if result != nil {
+		report.Dir = result.Dir
+		report.Runtime = &result.Report
+	}
+	if err == nil && (result == nil || !result.Validated) {
+		err = errors.New("installer did not return a verified runtime")
+	}
 	if err != nil {
-		return fmt.Errorf("installation failed: %w", err)
+		report.check("runtime_integrity", "fail", "Installation failed; existing runtime files were not replaced")
+		return finishNPUDiagnostic(cmd, report, "installation_failed", err)
 	}
-
-	fmt.Printf("  Status:   %s\n", installResult.Message)
-	fmt.Printf("  Dir:      %s\n", installResult.Dir)
-	fmt.Printf("  Provider: %s\n", installResult.Provider)
-	fmt.Println()
-
-	// Validate
-	fmt.Print("Validating installation... ")
-	if installResult.Validated {
-		fmt.Println("READY")
-	} else {
-		fmt.Println("NOT READY")
-	}
-	fmt.Println()
-
-	fmt.Println("Next steps:")
-	fmt.Println("  ollama run <model>          # Run a model with NPU acceleration")
-	fmt.Println("  ollama npu doctor           # Check full NPU health")
-	fmt.Println("  ollama benchmark npu        # Run NPU benchmark")
-
-	return nil
+	report.Status = "files_verified"
+	report.check("runtime_integrity", "pass", result.Message)
+	report.check("next_step", "not_tested", "Use 'ollama npu doctor'; a compatible model and verified provider execution are still required")
+	return finishNPUDiagnostic(cmd, report, "", nil)
 }
 
-// NPUDoctorHandler diagnoses NPU health and ORT GenAI readiness.
 func NPUDoctorHandler(cmd *cobra.Command, args []string) error {
-	fmt.Println("=== Ollama NPU Doctor ===")
-	fmt.Println()
-	allPassed := true
-
-	// 1. NPU Hardware Check
-	fmt.Println("--- NPU Hardware ---")
-	result := dxcore.Probe()
-	if result.Error != "" {
-		fmt.Printf("  FAIL: DXCore probe error: %s\n", result.Error)
-		allPassed = false
-	} else if result.NPUCount == 0 {
-		fmt.Println("  FAIL: No NPU adapters found")
-		fmt.Println("  Action: This device does not have an NPU. NPU inference is not available.")
-		allPassed = false
-	} else {
-		for _, a := range result.Adapters {
-			if a.IsNPU {
-				fmt.Printf("  PASS: NPU #%d: %s\n", a.Index, a.Description)
-				if a.HasD3D12GenericML && !a.HasD3D12 {
-					fmt.Println("    Note: Generic ML support detected (Snapdragon). QNN provider recommended.")
-				}
-			}
-		}
+	report := newNPUDiagnostic("npu doctor")
+	var failures []error
+	if len(args) != 0 {
+		return finishNPUDiagnostic(cmd, report, "invalid_arguments", errors.New("doctor accepts no positional arguments"))
 	}
-	fmt.Println()
-
-	// 2. ORT Runtime Validation
-	fmt.Println("--- ORT GenAI Runtime ---")
-	report := ortrunner.ValidateORTDir()
-
-	if len(report.FoundDLLs) == 0 {
-		fmt.Println("  FAIL: No ORT GenAI DLLs found")
-		fmt.Println("  Action: Run 'ollama npu setup' to install the runtime")
-		allPassed = false
+	if runtime.GOARCH != "arm64" {
+		report.check("platform", "fail", "The pinned QNN bundle requires Windows ARM64")
+		failures = append(failures, errors.New("pinned QNN bundle requires Windows ARM64"))
 	} else {
-		// Check core DLLs
-		coreDLLs := []string{"onnxruntime.dll", "onnxruntime-genai.dll"}
-		for _, dll := range coreDLLs {
-			found := false
-			for _, f := range report.FoundDLLs {
-				if strings.EqualFold(f, dll) {
-					found = true
-					break
-				}
-			}
-			if found {
-				fmt.Printf("  PASS: %s found\n", dll)
-			} else {
-				fmt.Printf("  FAIL: %s missing\n", dll)
-				allPassed = false
-			}
-		}
-
-		// Provider-specific checks
-		if report.HasQNN {
-			fmt.Println("  PASS: QNN provider available")
-		} else {
-			fmt.Println("  WARN: QNN provider not found (onnxruntime_providers_qnn.dll)")
-			fmt.Println("    Action: Run 'ollama npu setup --force' to reinstall")
-		}
-
-		if !report.HasTransport {
-			fmt.Println("  WARN: No DSP transport DLLs found (cdsprpc)")
-			fmt.Println("    Note: QNN HTP may fail without DSP transport. Check QNN SDK installation.")
-		}
+		report.check("platform", "pass", "Windows ARM64")
 	}
-	fmt.Println()
-
-	// 3. Library Load Selftest
-	fmt.Println("--- Library Load Selftest ---")
-	if err := oga.CheckInit(); err != nil {
-		fmt.Printf("  FAIL: ORT GenAI library load failed: %v\n", err)
-		fmt.Println("  Action: Run 'ollama npu setup' to install compatible DLLs")
-		allPassed = false
-	} else {
-		fmt.Println("  PASS: ORT GenAI library loaded successfully")
+	if err := probeNPUHardware(&report); err != nil {
+		failures = append(failures, err)
 	}
-	fmt.Println()
-
-	// Summary
-	fmt.Println("--- Summary ---")
-	if allPassed {
-		fmt.Println("  Status: READY")
-		fmt.Println("  All checks passed. NPU inference should be available.")
-	} else {
-		fmt.Println("  Status: NOT READY")
-		fmt.Println("  Some checks failed. Review the actions above.")
-		fmt.Println("  Common fix: ollama npu setup")
+	if err := inspectNPURuntime(cmd.Context(), diagnosticString(cmd, "dir"), &report); err != nil {
+		failures = append(failures, err)
 	}
-
-	return nil
+	report.untestedInference()
+	return finishNPUDiagnostic(cmd, report, "diagnostic_checks_failed", errors.Join(failures...))
 }
 
-func printValidationReport(report ortrunner.ORTDirReport) {
-	fmt.Println("=== ORT GenAI Validation ===")
-	fmt.Println()
-
-	fmt.Println("Search directories:")
-	for _, d := range report.SearchDirs {
-		fmt.Printf("  %s\n", d)
+func probeNPUHardware(report *npuDiagnostic) error {
+	result := dxcore.Probe()
+	hardware := &npuHardware{DXCoreAvailable: result.DXCoreAvailable, NPUCount: result.NPUCount, Adapters: []npuAdapter{}}
+	for _, adapter := range result.Adapters {
+		hardware.Adapters = append(hardware.Adapters, npuAdapter{
+			Index: adapter.Index, Description: adapter.Description, NPU: adapter.IsNPU,
+			D3D12: adapter.HasD3D12, DML: adapter.HasDML, GenericML: adapter.HasD3D12GenericML,
+			DriverVersion: adapter.DriverVersion,
+		})
 	}
-	fmt.Println()
-
-	fmt.Println("Found DLLs:")
-	if len(report.FoundDLLs) == 0 {
-		fmt.Println("  (none)")
-	} else {
-		seen := make(map[string]bool)
-		for _, dll := range report.FoundDLLs {
-			if !seen[dll] {
-				seen[dll] = true
-				fmt.Printf("  %s\n", dll)
-			}
-		}
+	report.Hardware = hardware
+	if result.Error != "" {
+		report.check("hardware", "fail", "DXCore probe failed")
+		return fmt.Errorf("DXCore probe failed: %s", result.Error)
 	}
-	if len(report.MissingDLLs) > 0 {
-		fmt.Println()
-		fmt.Println("Missing DLLs:")
-		for _, dll := range report.MissingDLLs {
-			fmt.Printf("  %s\n", dll)
-		}
+	if !result.DXCoreAvailable || result.NPUCount == 0 {
+		report.check("hardware", "fail", "No NPU was enumerated")
+		return errors.New("no NPU adapters found")
 	}
-	fmt.Println()
-
-	fmt.Printf("QNN:       %s\n", boolYesNo(report.HasQNN))
-	fmt.Printf("DML:       %s\n", boolYesNo(report.HasDML))
-	fmt.Printf("Transport: %s\n", boolYesNo(report.HasTransport))
-
-	if os.Getenv("OLLAMA_ORT_PATH") != "" {
-		fmt.Printf("\nOLLAMA_ORT_PATH = %s\n", os.Getenv("OLLAMA_ORT_PATH"))
-	}
+	report.check("hardware", "pass", "NPU adapter enumerated; D3D12/DirectML device creation is not QNN inference proof")
+	return nil
 }

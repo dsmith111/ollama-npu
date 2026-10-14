@@ -5,6 +5,9 @@ package oga
 import "C"
 
 import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -15,6 +18,12 @@ type Tokenizer struct {
 
 // NewTokenizer creates a tokenizer from a model.
 func NewTokenizer(model *Model) (*Tokenizer, error) {
+	if err := CheckInit(); err != nil {
+		return nil, err
+	}
+	if model == nil || model.ctx == nil {
+		return nil, fmt.Errorf("ort genai: model is closed")
+	}
 	var tok *C.OgaTokenizer
 	if err := ogaError(C.OgaCreateTokenizer(model.ctx, &tok)); err != nil {
 		return nil, err
@@ -24,6 +33,9 @@ func NewTokenizer(model *Model) (*Tokenizer, error) {
 
 // Encode tokenizes a string and returns the token IDs.
 func (t *Tokenizer) Encode(text string) ([]int32, error) {
+	if t == nil || t.ctx == nil || strings.ContainsRune(text, 0) || !utf8.ValidString(text) {
+		return nil, fmt.Errorf("ort genai: tokenizer is closed or text is not UTF-8 without NUL")
+	}
 	var seqs *C.OgaSequences
 	if err := ogaError(C.OgaCreateSequences(&seqs)); err != nil {
 		return nil, err
@@ -36,11 +48,17 @@ func (t *Tokenizer) Encode(text string) ([]int32, error) {
 	if err := ogaError(C.OgaTokenizerEncode(t.ctx, cText, seqs)); err != nil {
 		return nil, err
 	}
+	if C.OgaSequencesCount(seqs) != 1 {
+		return nil, fmt.Errorf("ort genai: expected exactly one encoded sequence")
+	}
 
 	count := C.OgaSequencesGetSequenceCount(seqs, 0)
 	data := C.OgaSequencesGetSequenceData(seqs, 0)
-	if count == 0 || data == nil {
+	if count == 0 {
 		return nil, nil
+	}
+	if data == nil {
+		return nil, fmt.Errorf("ort genai: encoded sequence data is nil")
 	}
 
 	tokens := make([]int32, count)
@@ -50,6 +68,14 @@ func (t *Tokenizer) Encode(text string) ([]int32, error) {
 
 // Decode converts token IDs back to a string.
 func (t *Tokenizer) Decode(tokens []int32) (string, error) {
+	if t == nil || t.ctx == nil {
+		return "", fmt.Errorf("ort genai: tokenizer is closed")
+	}
+	for _, token := range tokens {
+		if token < 0 {
+			return "", fmt.Errorf("ort genai: token IDs must be nonnegative")
+		}
+	}
 	if len(tokens) == 0 {
 		return "", nil
 	}
@@ -77,6 +103,12 @@ type TokenStream struct {
 
 // NewTokenStream creates a streaming token decoder from a tokenizer.
 func NewTokenStream(tok *Tokenizer) (*TokenStream, error) {
+	if err := CheckInit(); err != nil {
+		return nil, err
+	}
+	if tok == nil || tok.ctx == nil {
+		return nil, fmt.Errorf("ort genai: tokenizer is closed")
+	}
 	var stream *C.OgaTokenizerStream
 	if err := ogaError(C.OgaCreateTokenizerStream(tok.ctx, &stream)); err != nil {
 		return nil, err
@@ -87,6 +119,9 @@ func NewTokenStream(tok *Tokenizer) (*TokenStream, error) {
 // Decode decodes a single token into text. Returns partial text as tokens
 // accumulate to form complete word pieces.
 func (s *TokenStream) Decode(token int32) (string, error) {
+	if s.ctx == nil || token < 0 {
+		return "", fmt.Errorf("ort genai: stream is closed or token is negative")
+	}
 	var out *C.char
 	if err := ogaError(C.OgaTokenizerStreamDecode(s.ctx, C.int32_t(token), &out)); err != nil {
 		return "", err

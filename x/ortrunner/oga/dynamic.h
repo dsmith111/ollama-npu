@@ -20,6 +20,9 @@
 
 typedef struct {
     void* ctx;
+#ifdef _WIN32
+    DLL_DIRECTORY_COOKIE directory_cookie;
+#endif
 } oga_dynamic_handle;
 
 int oga_dynamic_load(

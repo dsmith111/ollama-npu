@@ -28,6 +28,15 @@ type ModelInfo struct {
 	VRAMBytes         int64
 }
 
+// TokensPerSecond returns zero when a rate is unavailable, never infinity or a
+// made-up epsilon-denominator rate for missing runner timings.
+func TokensPerSecond(tokens int, duration time.Duration) float64 {
+	if tokens <= 0 || duration <= 0 {
+		return 0
+	}
+	return float64(tokens) * 1e9 / float64(duration.Nanoseconds())
+}
+
 // OutputFormatHeader writes the header for the given output format.
 func OutputFormatHeader(w io.Writer, format string, verbose bool) {
 	switch format {
@@ -62,9 +71,9 @@ func OutputMetrics(w io.Writer, format string, metrics []Metrics, verbose bool) 
 	case "benchstat":
 		for _, m := range metrics {
 			if m.Step == "generate" || m.Step == "prefill" {
-				if m.Count > 0 {
+				if m.Count > 0 && m.Duration > 0 {
 					nsPerToken := float64(m.Duration.Nanoseconds()) / float64(m.Count)
-					tokensPerSec := float64(m.Count) / (float64(m.Duration.Nanoseconds()) + 1e-12) * 1e9
+					tokensPerSec := TokensPerSecond(m.Count, m.Duration)
 					fmt.Fprintf(w, "BenchmarkModel/name=%s/step=%s 1 %.2f ns/token %.2f token/sec\n",
 						m.Model, m.Step, nsPerToken, tokensPerSec)
 				} else {
@@ -84,9 +93,9 @@ func OutputMetrics(w io.Writer, format string, metrics []Metrics, verbose bool) 
 			if m.Step == "generate" || m.Step == "prefill" {
 				var nsPerToken float64
 				var tokensPerSec float64
-				if m.Count > 0 {
+				if m.Count > 0 && m.Duration > 0 {
 					nsPerToken = float64(m.Duration.Nanoseconds()) / float64(m.Count)
-					tokensPerSec = float64(m.Count) / (float64(m.Duration.Nanoseconds()) + 1e-12) * 1e9
+					tokensPerSec = TokensPerSecond(m.Count, m.Duration)
 				}
 				fmt.Fprintf(w, "%s,%s,%d,%.2f,%.2f\n", m.Model, m.Step, m.Count, nsPerToken, tokensPerSec)
 			} else {
@@ -104,8 +113,8 @@ func GeneratePromptForTokenCount(targetTokens int, epoch int) string {
 	if targetWords < 1 {
 		targetWords = 1
 	}
-	offset := epoch * 7
 	n := len(promptWordList)
+	offset := (epoch % n) * 7
 	words := make([]string, targetWords)
 	for i := range words {
 		words[i] = promptWordList[((i+offset)%n+n)%n]

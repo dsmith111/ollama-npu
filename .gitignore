@@ -34,3 +34,4 @@ results-*/
 
 _tools/*.obj
 _tools/*.pdb
+integration/testdata/models/

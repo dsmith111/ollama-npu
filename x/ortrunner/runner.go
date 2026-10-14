@@ -6,224 +6,100 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
+	"sort"
 	"strings"
-	"time"
+	"sync"
 
-	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/x/ortrunner/oga"
+	ortruntime "github.com/ollama/ollama/x/ortrunner/runtime"
 )
 
 // Runner manages ORT GenAI model loading and inference.
 type Runner struct {
-	model     *oga.Model
-	tokenizer *oga.Tokenizer
-	config    *oga.Config
-	modelDir  string
-
-	Requests chan Request
-}
-
-// Request represents a completion request.
-type Request struct {
-	TextCompletionsRequest
-	Responses chan CompletionResponse
-	Ctx       context.Context
-}
-
-// TextCompletionsRequest is the JSON body for /v1/completions.
-type TextCompletionsRequest struct {
-	Prompt  string `json:"prompt"`
-	Options struct {
-		Temperature float32 `json:"temperature"`
-		TopP        float32 `json:"top_p"`
-		TopK        int     `json:"top_k"`
-		MaxTokens   int     `json:"max_tokens"`
-		NumPredict  int     `json:"num_predict"`
-		NumCtx      int     `json:"num_ctx"`
-	} `json:"options"`
-}
-
-// CompletionResponse is a single JSONL line streamed back to the client.
-type CompletionResponse struct {
-	Content    string           `json:"content,omitempty"`
-	Done       bool             `json:"done"`
-	DoneReason int              `json:"done_reason,omitempty"`
-	Error      *api.StatusError `json:"error,omitempty"`
-
-	PromptEvalCount    int           `json:"prompt_eval_count,omitempty"`
-	PromptEvalDuration time.Duration `json:"prompt_eval_duration,omitempty"`
-	EvalCount          int           `json:"eval_count,omitempty"`
-	EvalDuration       time.Duration `json:"eval_duration,omitempty"`
+	nativeMu              sync.Mutex
+	stateMu               sync.RWMutex
+	model                 *oga.Model
+	tokenizer             *oga.Tokenizer
+	config                *oga.Config
+	modelDir              string
+	contextLength         int
+	eosTokens             []int32
+	modelType             string
+	vocabSize             int
+	promptPaddingMultiple int
+	status                StatusResponse
 }
 
 // Load loads the ORT GenAI model from a directory.
 func (r *Runner) Load(modelDir string) error {
-	r.modelDir = modelDir
-
-	cfg, err := oga.NewConfig(modelDir)
+	r.nativeMu.Lock()
+	defer r.nativeMu.Unlock()
+	if r.model != nil {
+		return fmt.Errorf("a model is already loaded")
+	}
+	meta, err := readModelMetadata(modelDir)
 	if err != nil {
 		return err
 	}
-	r.config = cfg
-
-	// Configure execution provider based on environment
-	provider := os.Getenv("OLLAMA_ONNX_PROVIDER")
-	if provider == "" {
-		if os.Getenv("OLLAMA_ONNX_NPU") == "1" {
-			provider = "qnn"
-		} else {
-			// Auto-detect: prefer QNN if QNN provider DLL exists, else DML, else CPU
-			provider = detectBestProvider()
-		}
-	}
-
-	// QNN EP options from environment
-	qnnBackendType := os.Getenv("OLLAMA_ORT_QNN_BACKEND_TYPE")
-	if qnnBackendType == "" {
-		qnnBackendType = "htp" // default: Hexagon Tensor Processor (NPU)
-	}
-	qnnBackendPath := os.Getenv("OLLAMA_ORT_QNN_BACKEND_PATH") // e.g. "QnnHtp.dll" or absolute path
-	qnnHTPArch := os.Getenv("OLLAMA_ORT_QNN_HTP_ARCH")         // e.g. "73" for v73; empty = auto
-	qnnSocModel := os.Getenv("OLLAMA_ORT_QNN_SOC_MODEL")       // e.g. "60" for Snapdragon X Elite; empty = auto
-
-	// Device targeting: OLLAMA_ORT_DEVICE_TYPE=npu|gpu, OLLAMA_ORT_DEVICE_ID=<index>
-	deviceType := os.Getenv("OLLAMA_ORT_DEVICE_TYPE")
-	deviceID := os.Getenv("OLLAMA_ORT_DEVICE_ID")
-
-	slog.Info("configuring ORT GenAI execution provider", "provider", provider, "device_type", deviceType, "device_id", deviceID,
-		"qnn_backend_type", qnnBackendType, "qnn_backend_path", qnnBackendPath,
-		"qnn_htp_arch", qnnHTPArch, "qnn_soc_model", qnnSocModel)
-
-	if err := cfg.ClearProviders(); err != nil {
-		slog.Warn("failed to clear providers, using defaults", "error", err)
-	} else {
-		switch provider {
-		case "qnn":
-			if err := cfg.AppendProvider("QNN"); err != nil {
-				return err
-			}
-			// QNN EP requires exactly one of backend_type or backend_path, not both.
-			if qnnBackendPath != "" {
-				if err := cfg.SetProviderOption("QNN", "backend_path", qnnBackendPath); err != nil {
-					slog.Warn("failed to set QNN backend_path", "error", err)
-				}
-			} else {
-				if err := cfg.SetProviderOption("QNN", "backend_type", qnnBackendType); err != nil {
-					slog.Warn("failed to set QNN backend_type", "error", err)
-				}
-			}
-			if qnnHTPArch != "" {
-				if err := cfg.SetProviderOption("QNN", "htp_arch", qnnHTPArch); err != nil {
-					slog.Warn("failed to set QNN htp_arch", "error", err)
-				}
-			}
-			if qnnSocModel != "" {
-				if err := cfg.SetProviderOption("QNN", "soc_model", qnnSocModel); err != nil {
-					slog.Warn("failed to set QNN soc_model", "error", err)
-				}
-			}
-		case "dml":
-			if err := cfg.AppendProvider("dml"); err != nil {
-				return err
-			}
-			// Apply device targeting options for DML
-			if deviceID != "" {
-				// Explicit device index takes priority (DXGI enumeration order)
-				if err := cfg.SetProviderOption("dml", "device_id", deviceID); err != nil {
-					slog.Warn("failed to set DML device_id", "error", err)
-				}
-			} else if deviceType != "" {
-				// Use DXCore device_filter for type-based targeting
-				switch deviceType {
-				case "npu", "NPU":
-					if err := cfg.SetProviderOption("dml", "device_filter", "npu"); err != nil {
-						slog.Warn("failed to set DML device_filter=npu, trying performance_preference", "error", err)
-						// Fallback: prefer minimum power (NPU > GPU in sort order)
-						if err := cfg.SetProviderOption("dml", "performance_preference", "minimum_power"); err != nil {
-							slog.Warn("failed to set DML performance_preference", "error", err)
-						}
-					}
-				case "gpu", "GPU":
-					if err := cfg.SetProviderOption("dml", "device_filter", "gpu"); err != nil {
-						slog.Warn("failed to set DML device_filter=gpu", "error", err)
-					}
-				default:
-					slog.Warn("unknown OLLAMA_ORT_DEVICE_TYPE, ignoring", "device_type", deviceType)
-				}
-			}
-		case "cpu":
-			// No provider needed, CPU is the default fallback
-		default:
-			if err := cfg.AppendProvider(provider); err != nil {
-				return err
-			}
-		}
-	}
-
-	slog.Info("loading ORT GenAI model", "dir", modelDir)
-	model, err := oga.NewModel(cfg)
-	if err != nil {
-		return classifyLoadError(err, provider)
-	}
-	r.model = model
-
-	tok, err := oga.NewTokenizer(model)
+	plan, err := planProvider(meta, modelDir, os.Getenv)
 	if err != nil {
 		return err
 	}
-	r.tokenizer = tok
-
-	slog.Info("ORT GenAI model loaded successfully")
+	if err := oga.CheckInit(); err != nil {
+		return err
+	}
+	cfg, model, tok, err := loadConfiguredModel(
+		func() (*oga.Config, error) { return oga.NewConfig(modelDir) },
+		func(cfg *oga.Config) error {
+			if !plan.preserve {
+				if err := cfg.ClearProviders(); err != nil {
+					return fmt.Errorf("clear execution providers: %w", err)
+				}
+			}
+			if plan.appendName == "" {
+				return nil
+			}
+			if err := cfg.AppendProvider(plan.appendName); err != nil {
+				return fmt.Errorf("append %s provider: %w", plan.name, err)
+			}
+			keys := make([]string, 0, len(plan.options))
+			for key := range plan.options {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				if err := cfg.SetProviderOption(plan.appendName, key, plan.options[key]); err != nil {
+					return fmt.Errorf("set %s option %s: %w", plan.name, key, err)
+				}
+			}
+			return nil
+		},
+		oga.NewModel,
+		oga.NewTokenizer,
+	)
+	if err != nil {
+		return classifyLoadError(err, plan.name)
+	}
+	r.model, r.tokenizer, r.config = model, tok, cfg
+	r.modelDir, r.contextLength, r.eosTokens = modelDir, meta.contextLength, meta.eosTokens
+	r.modelType = meta.modelType
+	r.vocabSize = meta.vocabSize
+	r.promptPaddingMultiple = meta.promptPaddingMultiple
+	r.stateMu.Lock()
+	r.status = StatusResponse{
+		ProtocolVersion: ProtocolVersion,
+		Status:          0, Progress: 100, ContextLength: meta.contextLength,
+		PromptPaddingMultiple: meta.promptPaddingMultiple,
+		Provider:              plan.name, ProviderState: plan.state,
+		NativeCancelAvailable: oga.NativeCancellationAvailable(),
+		CancellationMode:      "between-native-calls", CancellationGraceMS: int(cancellationGrace.Milliseconds()),
+		WatchdogRequired:   true,
+		ProviderConfigured: true, ProviderLoaded: true,
+		Hybrid: plan.hybrid, StrictQNN: plan.strictQNN,
+	}
+	r.stateMu.Unlock()
+	slog.Info("ORT GenAI model loaded", "provider", plan.name, "state", plan.state, "context_length", meta.contextLength)
 	return nil
-}
-
-// detectBestProvider checks for provider DLL availability and returns the best
-// provider string. For Snapdragon/QNN NPU: "qnn"; for DirectML GPU: "dml"; fallback: "cpu".
-func detectBestProvider() string {
-	// Build list of directories to search for provider DLLs
-	var searchDirs []string
-	if ortPath, ok := os.LookupEnv("OLLAMA_ORT_PATH"); ok {
-		searchDirs = append(searchDirs, filepath.SplitList(ortPath)...)
-	}
-	// Include the default runtime install directory
-	if installDir := DefaultRuntimeInstallDir(); installDir != "" {
-		searchDirs = append(searchDirs, installDir)
-	}
-	if exe, err := os.Executable(); err == nil {
-		if eval, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = eval
-		}
-		searchDirs = append(searchDirs, filepath.Dir(exe))
-	}
-
-	hasQNN := false
-	hasDML := false
-	for _, dir := range searchDirs {
-		if !hasQNN {
-			if _, err := os.Stat(filepath.Join(dir, "onnxruntime_providers_qnn.dll")); err == nil {
-				hasQNN = true
-			}
-		}
-		if !hasDML {
-			// DML support is built into onnxruntime.dll for DML builds; check for DirectML.dll
-			if _, err := os.Stat(filepath.Join(dir, "DirectML.dll")); err == nil {
-				hasDML = true
-			}
-		}
-	}
-
-	if hasQNN {
-		slog.Info("auto-detected QNN provider DLLs, selecting provider=qnn")
-		return "qnn"
-	}
-	if hasDML {
-		return "dml"
-	}
-	// No provider DLLs found — use CPU fallback rather than assuming DML is built in.
-	// This avoids NPU_PROVIDER_MISMATCH errors with QNN-only builds.
-	slog.Info("no QNN or DML provider DLLs found, defaulting to provider=cpu")
-	return "cpu"
 }
 
 // classifyLoadError examines an ORT GenAI model load error and returns a more
@@ -298,49 +174,28 @@ func checkMissingQNNDLLs() string {
 
 // ortSearchDirs returns the list of directories to scan for ORT/QNN DLLs.
 func ortSearchDirs() []string {
-	var dirs []string
-	if ortPath, ok := os.LookupEnv("OLLAMA_ORT_PATH"); ok {
-		dirs = append(dirs, filepath.SplitList(ortPath)...)
-	}
-	// Include the default runtime install directory
-	if installDir := DefaultRuntimeInstallDir(); installDir != "" {
-		dirs = append(dirs, installDir)
-	}
-	if exe, err := os.Executable(); err == nil {
-		if eval, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = eval
-		}
-		dirs = append(dirs, filepath.Dir(exe))
-	}
-	return dirs
+	return ortruntime.SearchDirs()
 }
 
 // DefaultRuntimeInstallDir returns the standard per-user install directory
 // for the ORT GenAI runtime bundle on Windows.
 func DefaultRuntimeInstallDir() string {
-	if runtime.GOOS != "windows" {
-		return ""
-	}
-	localAppData := os.Getenv("LOCALAPPDATA")
-	if localAppData == "" {
-		return ""
-	}
-	return filepath.Join(localAppData, "Ollama", "runtimes", "ortgenai", "win-arm64-qnn", "0.12.2_1.24.1")
+	return ortruntime.DefaultInstallDir()
 }
 
 // ORTDirReport describes the contents and health of an ORT runtime directory.
 type ORTDirReport struct {
-	SearchDirs    []string
-	FoundDLLs     []string
-	MissingDLLs   []string
-	HasQNN        bool
-	HasDML        bool
-	HasTransport  bool // cdsprpc / DSP transport DLL found
-	Provider      string
-	BackendType   string
-	BackendPath   string
-	HTPArch       string
-	SocModel      string
+	SearchDirs   []string
+	FoundDLLs    []string
+	MissingDLLs  []string
+	HasQNN       bool
+	HasDML       bool
+	HasTransport bool // cdsprpc / DSP transport DLL found
+	Provider     string
+	BackendType  string
+	BackendPath  string
+	HTPArch      string
+	SocModel     string
 }
 
 // ValidateORTDir inspects the ORT runtime directory and returns a diagnostic report.
@@ -412,13 +267,73 @@ func ValidateORTDir() ORTDirReport {
 
 // Close frees all ORT GenAI resources.
 func (r *Runner) Close() {
+	r.nativeMu.Lock()
+	defer r.nativeMu.Unlock()
 	if r.tokenizer != nil {
 		r.tokenizer.Close()
+		r.tokenizer = nil
 	}
 	if r.model != nil {
 		r.model.Close()
+		r.model = nil
 	}
 	if r.config != nil {
 		r.config.Close()
+		r.config = nil
 	}
+	r.stateMu.Lock()
+	r.status = StatusResponse{ProtocolVersion: ProtocolVersion, Status: 1, ProviderState: "unloaded"}
+	r.stateMu.Unlock()
+}
+
+func (r *Runner) Status() StatusResponse {
+	r.stateMu.RLock()
+	defer r.stateMu.RUnlock()
+	return r.status
+}
+
+// IsStrictQNN describes configured CPU fallback policy, not hardware verification.
+func (r *Runner) IsStrictQNN() bool { return r.Status().StrictQNN }
+
+func (r *Runner) markOperationVerified() {
+	r.stateMu.Lock()
+	r.status.OperationVerified = true
+	r.stateMu.Unlock()
+}
+
+func (r *Runner) Tokenize(ctx context.Context, text string) ([]int32, error) {
+	r.nativeMu.Lock()
+	defer r.nativeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if r.tokenizer == nil {
+		return nil, fmt.Errorf("model is not loaded")
+	}
+	tokens, err := r.tokenizer.Encode(text)
+	if err == nil {
+		for _, token := range tokens {
+			if token < 0 {
+				return nil, fmt.Errorf("tokenizer returned a negative token ID")
+			}
+		}
+	}
+	return tokens, err
+}
+
+func (r *Runner) Detokenize(ctx context.Context, tokens []int32) (string, error) {
+	r.nativeMu.Lock()
+	defer r.nativeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if r.tokenizer == nil {
+		return "", fmt.Errorf("model is not loaded")
+	}
+	for _, token := range tokens {
+		if token < 0 || int(token) >= r.vocabSize {
+			return "", ResponseError{StatusCode: 400, ErrorMessage: fmt.Sprintf("token ID %d is outside model vocabulary", token)}
+		}
+	}
+	return r.tokenizer.Decode(tokens)
 }

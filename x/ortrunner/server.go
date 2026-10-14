@@ -1,7 +1,6 @@
 package ortrunner
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,240 +12,98 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
-	"time"
 
-	"golang.org/x/sync/errgroup"
-
-	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/logutil"
 	"github.com/ollama/ollama/x/ortrunner/oga"
 )
 
-// Execute is the subprocess entry point for the ORT GenAI runner.
+// Execute permits unauthenticated loopback access only when neither --auth-token
+// nor OLLAMA_ORT_RUNNER_TOKEN is set, for legacy direct runner invocations.
 func Execute(args []string) error {
 	slog.SetDefault(logutil.NewLogger(os.Stderr, envconfig.LogLevel()))
-
+	var modelDir, token string
+	var port int
+	flags := flag.NewFlagSet("ortrunner", flag.ContinueOnError)
+	_ = flags.Bool("ortgenai-engine", false, "Select the internal ORT GenAI runner")
+	flags.StringVar(&modelDir, "model", "", "Path to ONNX model directory")
+	flags.IntVar(&port, "port", 0, "Loopback port; zero chooses an available port")
+	flags.StringVar(&token, "auth-token", os.Getenv("OLLAMA_ORT_RUNNER_TOKEN"), "Per-child bearer token; omitted means legacy unauthenticated loopback access")
+	_ = flags.Bool("verbose", false, "Enable debug logging")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if modelDir == "" || port < 0 || port > 65535 || flags.NArg() != 0 {
+		return fmt.Errorf("a model directory and a port between 0 and 65535 are required; positional arguments are unsupported")
+	}
+	if token != "" && (strings.TrimSpace(token) != token || strings.ContainsAny(token, "\x00\r\n \t")) {
+		return fmt.Errorf("invalid runner bearer token")
+	}
+	if token == "" {
+		slog.Warn("legacy direct ORT runner allows unauthenticated loopback requests; set OLLAMA_ORT_RUNNER_TOKEN for child isolation")
+	}
 	if err := oga.CheckInit(); err != nil {
 		return fmt.Errorf("ORT GenAI not available: %w", err)
 	}
-
-	var (
-		modelDir string
-		port     int
-	)
-
-	flagSet := flag.NewFlagSet("ortrunner", flag.ExitOnError)
-	flagSet.StringVar(&modelDir, "model", "", "Path to ONNX model directory")
-	flagSet.IntVar(&port, "port", 0, "Port to listen on")
-	_ = flagSet.Bool("verbose", false, "Enable debug logging")
-	flagSet.Parse(args)
-
-	runner := Runner{
-		Requests: make(chan Request),
-	}
-	// Ensure OGA resources are destroyed before global shutdown.
-	// Order matters: destroy objects first, then call OgaShutdown.
-	defer oga.Shutdown()
-	defer runner.Close()
-
-	// Set up signal handling for graceful shutdown
 	sigCtx, sigCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer sigCancel()
-
-	slog.Info("loading ORT GenAI model", "dir", modelDir)
+	var runner Runner
 	if err := runner.Load(modelDir); err != nil {
+		runner.Close()
+		oga.Shutdown()
 		return fmt.Errorf("failed to load model: %w", err)
 	}
-
-	mux := http.NewServeMux()
-
-	// Health / status endpoint
-	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewEncoder(w).Encode(statusResponse{
-			Status:   0,
-			Progress: 100,
-		}); err != nil {
-			slog.Error("failed to encode status", "error", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	service := newRunnerService(sigCtx, &runner, requestQueueCapacity)
+	cleanupSafe := true
+	defer func() {
+		service.stop()
+		if cleanupSafe {
+			runner.Close()
+			oga.Shutdown()
 		}
-	})
-
-	// Model management endpoint
-	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"Success": true})
-	})
-
-	// Completion endpoint — streaming JSONL
-	completionHandler := func(w http.ResponseWriter, r *http.Request) {
-		request := Request{Responses: make(chan CompletionResponse)}
-
-		if err := json.NewDecoder(r.Body).Decode(&request.TextCompletionsRequest); err != nil {
-			slog.Error("failed to decode request", "error", err)
-			http.Error(w, "Bad Request", http.StatusBadRequest)
-			return
-		}
-
-		request.Options.MaxTokens = cmp.Or(request.Options.MaxTokens, request.Options.NumPredict)
-
-		var cancel context.CancelFunc
-		request.Ctx, cancel = context.WithCancel(r.Context())
-		defer cancel()
-
-		select {
-		case <-r.Context().Done():
-			return
-		case runner.Requests <- request:
-		}
-
-		w.Header().Set("Content-Type", "application/jsonl")
-		w.WriteHeader(http.StatusOK)
-		enc := json.NewEncoder(w)
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case response, ok := <-request.Responses:
-				if !ok {
-					return
-				}
-				if err := enc.Encode(response); err != nil {
-					slog.Error("failed to encode response", "error", err)
-					return
-				}
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-				}
-			}
-		}
+	}()
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		service.stop()
+		<-service.done
+		return err
 	}
-	mux.HandleFunc("POST /v1/completions", completionHandler)
-	mux.HandleFunc("POST /completion", completionHandler)
-
-	// Tokenize endpoint
-	mux.HandleFunc("POST /v1/tokenize", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Content string `json:"content"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "Bad Request", http.StatusBadRequest)
-			return
-		}
-
-		tokens, err := runner.tokenizer.Encode(body.Content)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		intTokens := make([]int, len(tokens))
-		for i, t := range tokens {
-			intTokens[i] = int(t)
-		}
-
-		json.NewEncoder(w).Encode(intTokens)
-	})
-
-	// Redirects for compatibility with the standard runner protocol
-	for source, target := range map[string]string{
-		"GET /health": "/v1/status",
-		"POST /load":  "/v1/models",
-	} {
-		mux.Handle(source, http.RedirectHandler(target, http.StatusPermanentRedirect))
+	defer listener.Close()
+	server := newHTTPServer(service.ctx, service.handler(token))
+	server.Addr = listener.Addr().String()
+	ready := ReadyResponse{Event: "ready", Port: listener.Addr().(*net.TCPAddr).Port, StatusResponse: service.status()}
+	if err := json.NewEncoder(os.Stdout).Encode(ready); err != nil {
+		service.stop()
+		<-service.done
+		return fmt.Errorf("announce runner readiness: %w", err)
 	}
-
-	// Run the request processing loop and HTTP server
-	g, ctx := errgroup.WithContext(sigCtx)
-
-	server := &http.Server{
-		Addr: net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			recorder := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
-			t := time.Now()
-			mux.ServeHTTP(recorder, r)
-
-			var level slog.Level
-			switch {
-			case recorder.code >= 500:
-				level = slog.LevelError
-			case recorder.code >= 400:
-				level = slog.LevelWarn
-			case recorder.code >= 300:
-				return
-			}
-			slog.Log(r.Context(), level, "ServeHTTP", "method", r.Method, "path", r.URL.Path, "took", time.Since(t), "status", recorder.Status())
-		}),
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- server.Serve(listener)
+	}()
+	select {
+	case err = <-serveErr:
+		service.stop()
+	case <-service.ctx.Done():
 	}
-
-	g.Go(func() error {
-		for {
-			select {
-			case <-ctx.Done():
-				return nil
-			case request := <-runner.Requests:
-				if err := runner.Generate(request.Ctx, request); err != nil {
-					slog.Error("generation failed", "error", err)
-					var statusErr api.StatusError
-					if !errors.As(err, &statusErr) {
-						statusErr = api.StatusError{
-							StatusCode:   http.StatusInternalServerError,
-							ErrorMessage: err.Error(),
-						}
-					}
-					select {
-					case request.Responses <- CompletionResponse{Error: &statusErr}:
-					case <-request.Ctx.Done():
-					}
-				}
-				close(request.Responses)
-			}
-		}
-	})
-
-	g.Go(func() error {
-		slog.Info("ORT GenAI runner listening", "addr", server.Addr)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			return err
-		}
-		return nil
-	})
-
-	// Graceful shutdown: when context is cancelled (signal), shut down HTTP server
-	g.Go(func() error {
-		<-ctx.Done()
-		slog.Info("shutting down ORT GenAI runner")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return server.Shutdown(shutdownCtx)
-	})
-
-	return g.Wait()
-}
-
-type statusResponse struct {
-	Status   int    `json:"status"`
-	Progress int    `json:"progress"`
-	Memory   uint64 `json:"memory,omitempty"`
-}
-
-type statusRecorder struct {
-	http.ResponseWriter
-	code int
-}
-
-func (w *statusRecorder) WriteHeader(code int) {
-	w.code = code
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w *statusRecorder) Status() string {
-	return strconv.Itoa(w.code) + " " + http.StatusText(w.code)
-}
-
-func (w *statusRecorder) Flush() {
-	if f, ok := w.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
+	service.stop()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cancellationGrace)
+	defer cancel()
+	shutdownErr := server.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		shutdownErr = errors.Join(shutdownErr, server.Close())
 	}
+	select {
+	case <-service.done:
+	case <-shutdownCtx.Done():
+		// Never destroy a model while a native call may still be using it.
+		cleanupSafe = false
+		return errors.Join(err, shutdownErr, fmt.Errorf("native ORT work exceeded cancellation grace; parent must terminate the child process"))
+	}
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+	return errors.Join(err, shutdownErr)
 }

@@ -2,6 +2,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <wchar.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -13,54 +15,61 @@
 #endif
 
 #ifdef _WIN32
-static DLL_DIRECTORY_COOKIE oga_dll_dir_cookie = NULL;
 static int oga_dll_dirs_initialized = 0;
 #endif
 
 static int oga_dynamic_open(oga_dynamic_handle* handle, const char* path) {
+    handle->ctx = NULL;
 #ifdef _WIN32
-    // Use AddDllDirectory for deterministic DLL resolution.
-    // This ensures dependent DLLs (onnxruntime.dll, DirectML.dll,
-    // onnxruntime_providers_qnn.dll, QnnHtp.dll) are always loaded from
-    // the same directory as onnxruntime-genai.dll, not from System32 or
-    // a stale PATH entry.
-    //
-    // Unlike SetDllDirectoryA (which is process-global and immediately reset),
-    // AddDllDirectory persists so lazy-loaded provider DLLs also resolve
-    // correctly. Requires Windows 8+ (KB2533623), which is guaranteed on
-    // Snapdragon devices running Windows 11.
-
-    // Enable safe DLL search mode once
+    handle->directory_cookie = NULL;
     if (!oga_dll_dirs_initialized) {
-        SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)) return 1;
         oga_dll_dirs_initialized = 1;
     }
-
-    // Extract parent directory from path
-    char dir[MAX_PATH];
-    size_t len = strlen(path);
-    if (len >= MAX_PATH) len = MAX_PATH - 1;
-    memcpy(dir, path, len);
-    dir[len] = '\0';
-    char* sep = strrchr(dir, '\\');
-    if (!sep) sep = strrchr(dir, '/');
-    if (sep) {
-        *sep = '\0';
-
-        // Convert to wide string for AddDllDirectory
-        wchar_t wdir[MAX_PATH];
-        if (MultiByteToWideChar(CP_UTF8, 0, dir, -1, wdir, MAX_PATH) > 0) {
-            // Add directory permanently — do NOT remove it, so lazy-loaded
-            // provider DLLs (QnnHtp.dll etc.) resolve from the same location
-            DLL_DIRECTORY_COOKIE cookie = AddDllDirectory(wdir);
-            if (cookie != NULL) {
-                oga_dll_dir_cookie = cookie;
-            }
-        }
+    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    if (count == 0) return 1;
+    wchar_t* wide_path = malloc((size_t)count * sizeof(wchar_t));
+    if (!wide_path) return 1;
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide_path, count)) {
+        free(wide_path);
+        return 1;
     }
-
-    // Load with LOAD_LIBRARY_SEARCH_DEFAULT_DIRS + our added dir
-    handle->ctx = (void*) LoadLibraryA(path);
+    DWORD flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+    if (wcschr(wide_path, L'\\') || wcschr(wide_path, L'/')) {
+        DWORD capacity = GetFullPathNameW(wide_path, 0, NULL, NULL);
+        wchar_t* absolute = capacity ? malloc((size_t)capacity * sizeof(wchar_t)) : NULL;
+        DWORD length = absolute ? GetFullPathNameW(wide_path, capacity, absolute, NULL) : 0;
+        free(wide_path);
+        if (!length || length >= capacity) {
+            free(absolute);
+            return 1;
+        }
+        wide_path = absolute;
+        wchar_t* sep = wcsrchr(wide_path, L'\\');
+        if (!sep) sep = wcsrchr(wide_path, L'/');
+        if (!sep) {
+            free(wide_path);
+            return 1;
+        }
+        wchar_t* end = sep;
+        if (sep == wide_path + 2 && wide_path[1] == L':') end = sep + 1;
+        wchar_t saved = *end;
+        *end = L'\0';
+        // Keep only the successful load's directory for lazily loaded providers.
+        handle->directory_cookie = AddDllDirectory(wide_path);
+        *end = saved;
+        if (!handle->directory_cookie) {
+            free(wide_path);
+            return 1;
+        }
+        flags |= LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR;
+    }
+    handle->ctx = (void*)LoadLibraryExW(wide_path, NULL, flags);
+    free(wide_path);
+    if (!handle->ctx && handle->directory_cookie) {
+        RemoveDllDirectory(handle->directory_cookie);
+        handle->directory_cookie = NULL;
+    }
 #else
     handle->ctx = (void*) DLOPEN(path);
 #endif
@@ -79,4 +88,10 @@ void oga_dynamic_unload(oga_dynamic_handle* handle) {
         DLCLOSE(handle->ctx);
         handle->ctx = NULL;
     }
+#ifdef _WIN32
+    if (handle->directory_cookie) {
+        RemoveDllDirectory(handle->directory_cookie);
+        handle->directory_cookie = NULL;
+    }
+#endif
 }

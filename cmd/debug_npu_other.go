@@ -2,14 +2,9 @@
 
 package cmd
 
-import (
-	"fmt"
-
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
 // DebugNPUHandler is not available on non-Windows platforms.
 func DebugNPUHandler(cmd *cobra.Command, args []string) error {
-	fmt.Println("NPU diagnostics are only available on Windows.")
-	return nil
+	return unsupportedNPUDiagnostic(cmd, "debug-npu", "NPU diagnostics are only available on Windows")
 }

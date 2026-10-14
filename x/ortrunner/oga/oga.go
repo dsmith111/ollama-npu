@@ -11,14 +11,19 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"unsafe"
+
+	ortruntime "github.com/ollama/ollama/x/ortrunner/runtime"
 )
 
 var initError error
 var initLoadError string
+var initOnce sync.Once
 
 // CheckInit returns any error that occurred during ORT GenAI dynamic library initialization.
 func CheckInit() error {
+	initOnce.Do(initialize)
 	if initError != nil && initLoadError != "" {
 		slog.Error(initLoadError)
 	}
@@ -87,23 +92,14 @@ func tryLoadByName() bool {
 	return true
 }
 
-func init() {
+func initialize() {
 	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
+		initError = fmt.Errorf("ORT GenAI is unsupported on %s", runtime.GOOS)
 		return
 	}
 
-	// Try OLLAMA_ORT_PATH first
-	if path, ok := os.LookupEnv("OLLAMA_ORT_PATH"); ok {
-		for _, dir := range filepath.SplitList(path) {
-			if tryLoadFromDir(dir) {
-				return
-			}
-		}
-	}
-
-	// Try default install directory (%LOCALAPPDATA%\Ollama\runtimes\ortgenai\...)
-	if installDir := defaultRuntimeInstallDir(); installDir != "" {
-		if tryLoadFromDir(installDir) {
+	for _, dir := range ortruntime.SearchDirs() {
+		if tryLoadFromDir(dir) {
 			return
 		}
 	}
@@ -168,16 +164,4 @@ func init() {
 
 	initError = fmt.Errorf("failed to load ORT GenAI dynamic library (searched: %v)", searchDirs)
 	slog.Debug("ORT GenAI dynamic library not available", "error", initError)
-}
-
-// defaultRuntimeInstallDir returns the per-user ORT GenAI runtime install directory.
-func defaultRuntimeInstallDir() string {
-	if runtime.GOOS != "windows" {
-		return ""
-	}
-	localAppData := os.Getenv("LOCALAPPDATA")
-	if localAppData == "" {
-		return ""
-	}
-	return filepath.Join(localAppData, "Ollama", "runtimes", "ortgenai", "win-arm64-qnn", "0.12.2_1.24.1")
 }

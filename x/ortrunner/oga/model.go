@@ -5,7 +5,9 @@ package oga
 import "C"
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"unsafe"
 )
 
@@ -26,6 +28,12 @@ type Config struct {
 
 // NewConfig creates a new ORT GenAI config from a model directory path.
 func NewConfig(modelDir string) (*Config, error) {
+	if strings.ContainsRune(modelDir, 0) {
+		return nil, fmt.Errorf("ort genai: model directory contains NUL")
+	}
+	if err := CheckInit(); err != nil {
+		return nil, err
+	}
 	cPath := C.CString(modelDir)
 	defer C.free(unsafe.Pointer(cPath))
 
@@ -36,13 +44,19 @@ func NewConfig(modelDir string) (*Config, error) {
 	return &Config{ctx: cfg}, nil
 }
 
-// ClearProviders removes all execution providers from the config.
+// ClearProviders removes the primary decoder's provider list only, not pipeline stages or options.
 func (c *Config) ClearProviders() error {
+	if c.ctx == nil {
+		return fmt.Errorf("ort genai: config is closed")
+	}
 	return ogaError(C.OgaConfigClearProviders(c.ctx))
 }
 
 // AppendProvider adds an execution provider to the config.
 func (c *Config) AppendProvider(name string) error {
+	if c.ctx == nil || strings.ContainsAny(name, "\"\\\x00\r\n") {
+		return fmt.Errorf("ort genai: config is closed or provider name is invalid")
+	}
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return ogaError(C.OgaConfigAppendProvider(c.ctx, cName))
@@ -50,11 +64,19 @@ func (c *Config) AppendProvider(name string) error {
 
 // SetProviderOption sets a key/value option on an execution provider.
 func (c *Config) SetProviderOption(provider, key, value string) error {
+	if c.ctx == nil || strings.ContainsAny(provider+key, "\"\\\x00\r\n") {
+		return fmt.Errorf("ort genai: config is closed or provider/key is invalid")
+	}
 	cProvider := C.CString(provider)
 	defer C.free(unsafe.Pointer(cProvider))
 	cKey := C.CString(key)
 	defer C.free(unsafe.Pointer(cKey))
-	cValue := C.CString(value)
+	// v0.12.2 interpolates values into JSON without escaping them.
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	cValue := C.CString(string(encoded[1 : len(encoded)-1]))
 	defer C.free(unsafe.Pointer(cValue))
 	return ogaError(C.OgaConfigSetProviderOption(c.ctx, cProvider, cKey, cValue))
 }
@@ -74,6 +96,12 @@ type Model struct {
 
 // NewModel creates a model from a config.
 func NewModel(config *Config) (*Model, error) {
+	if err := CheckInit(); err != nil {
+		return nil, err
+	}
+	if config == nil || config.ctx == nil {
+		return nil, fmt.Errorf("ort genai: config is closed")
+	}
 	var m *C.OgaModel
 	if err := ogaError(C.OgaCreateModelFromConfig(config.ctx, &m)); err != nil {
 		return nil, err

@@ -92,6 +92,13 @@ static inline void OgaDestroyGenerator(OgaGenerator* generator) { OgaDestroyGene
 extern OgaResult* (*OgaGenerator_AppendTokenSequences_)(OgaGenerator* generator, const OgaSequences* sequences);
 static inline OgaResult* OgaGenerator_AppendTokenSequences(OgaGenerator* generator, const OgaSequences* sequences) { return OgaGenerator_AppendTokenSequences_(generator, sequences); }
 
+extern OgaResult* (*OgaGenerator_AppendTokens_)(OgaGenerator* generator, const int32_t* tokens, size_t count);
+static inline OgaResult* OgaGenerator_AppendTokens(OgaGenerator* generator, const int32_t* tokens, size_t count) { return OgaGenerator_AppendTokens_(generator, tokens, count); }
+
+extern OgaResult* (*OgaGenerator_SetRuntimeOption_)(OgaGenerator* generator, const char* key, const char* value);
+static inline bool OgaHasRuntimeOption(void) { return OgaGenerator_SetRuntimeOption_ != NULL; }
+static inline OgaResult* OgaGenerator_SetRuntimeOption(OgaGenerator* generator, const char* key, const char* value) { return OgaGenerator_SetRuntimeOption_(generator, key, value); }
+
 extern OgaResult* (*OgaGenerator_GenerateNextToken_)(OgaGenerator* generator);
 static inline OgaResult* OgaGenerator_GenerateNextToken(OgaGenerator* generator) { return OgaGenerator_GenerateNextToken_(generator); }
 
@@ -100,6 +107,26 @@ static inline bool OgaGenerator_IsDone(OgaGenerator* generator) { return OgaGene
 
 extern OgaResult* (*OgaGenerator_GetNextTokens_)(const OgaGenerator* generator, const int32_t** out, size_t* out_count);
 static inline OgaResult* OgaGenerator_GetNextTokens(const OgaGenerator* generator, const int32_t** out, size_t* out_count) { return OgaGenerator_GetNextTokens_(generator, out, out_count); }
+
+// Optional logits APIs needed to preserve finite repetition windows.
+extern OgaResult* (*OgaGenerator_GetLogits_)(OgaGenerator*, OgaTensor**);
+static inline OgaResult* OgaGenerator_GetLogits(OgaGenerator* g, OgaTensor** out) { return OgaGenerator_GetLogits_(g, out); }
+extern OgaResult* (*OgaGenerator_SetLogits_)(OgaGenerator*, OgaTensor*);
+static inline OgaResult* OgaGenerator_SetLogits(OgaGenerator* g, OgaTensor* t) { return OgaGenerator_SetLogits_(g, t); }
+extern void (*OgaDestroyTensor_)(OgaTensor*);
+static inline void OgaDestroyTensor(OgaTensor* t) { OgaDestroyTensor_(t); }
+extern OgaResult* (*OgaTensorGetType_)(OgaTensor*, OgaElementType*);
+static inline OgaResult* OgaTensorGetType(OgaTensor* t, OgaElementType* out) { return OgaTensorGetType_(t, out); }
+extern OgaResult* (*OgaTensorGetShapeRank_)(OgaTensor*, size_t*);
+static inline OgaResult* OgaTensorGetShapeRank(OgaTensor* t, size_t* out) { return OgaTensorGetShapeRank_(t, out); }
+extern OgaResult* (*OgaTensorGetShape_)(OgaTensor*, int64_t*, size_t);
+static inline OgaResult* OgaTensorGetShape(OgaTensor* t, int64_t* shape, size_t count) { return OgaTensorGetShape_(t, shape, count); }
+extern OgaResult* (*OgaTensorGetData_)(OgaTensor*, void**);
+static inline OgaResult* OgaTensorGetData(OgaTensor* t, void** out) { return OgaTensorGetData_(t, out); }
+static inline bool OgaHasLogits(void) {
+    return OgaGenerator_GetLogits_ && OgaGenerator_SetLogits_ && OgaDestroyTensor_ &&
+           OgaTensorGetType_ && OgaTensorGetShapeRank_ && OgaTensorGetShape_ && OgaTensorGetData_;
+}
 
 // --- Error handling ---
 extern const char* (*OgaResultGetError_)(const OgaResult* result);

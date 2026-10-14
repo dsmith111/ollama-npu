@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,8 +20,6 @@ import (
 	"golang.org/x/text/encoding/unicode"
 
 	"github.com/ollama/ollama/api"
-	"github.com/ollama/ollama/convert"
-	"github.com/ollama/ollama/fs/ggml"
 )
 
 func TestParseFileFile(t *testing.T) {
@@ -56,6 +53,68 @@ TEMPLATE """{{ if .System }}<|start_header_id|>system<|end_header_id|>
 	}
 
 	assert.Equal(t, expectedCommands, modelfile.Commands)
+}
+
+func TestParseFileDraft(t *testing.T) {
+	modelfile, err := ParseFile(strings.NewReader(`
+FROM base
+DRAFT ./assistant
+`))
+	require.NoError(t, err)
+
+	expectedCommands := []Command{
+		{Name: "model", Args: "base"},
+		{Name: "draft", Args: "./assistant"},
+	}
+	assert.Equal(t, expectedCommands, modelfile.Commands)
+	assert.Contains(t, modelfile.String(), "DRAFT ./assistant")
+}
+
+func TestCreateRequestDraftFiles(t *testing.T) {
+	dir := t.TempDir()
+	draft := filepath.Join(dir, "draft.gguf")
+	require.NoError(t, os.WriteFile(draft, []byte("draft"), 0o644))
+
+	modelfile, err := ParseFile(strings.NewReader(`
+FROM base
+DRAFT ./draft.gguf
+`))
+	require.NoError(t, err)
+
+	req, err := modelfile.CreateRequest(dir)
+	require.NoError(t, err)
+	require.Len(t, req.DraftFiles, 1)
+	assert.Contains(t, req.DraftFiles, draft)
+}
+
+func TestCreateRequestDraftRejectsSameFile(t *testing.T) {
+	dir := t.TempDir()
+	model := filepath.Join(dir, "model.gguf")
+	require.NoError(t, os.WriteFile(model, []byte("model"), 0o644))
+
+	modelfile, err := ParseFile(strings.NewReader(`
+FROM ./model.gguf
+DRAFT ./model.gguf
+`))
+	require.NoError(t, err)
+
+	_, err = modelfile.CreateRequest(dir)
+	require.ErrorContains(t, err, "DRAFT must not reference the same local path as FROM")
+}
+
+func TestCreateRequestDraftRejectsSameDirectory(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "model.gguf"), make([]byte, 512), 0o644))
+
+	modelfile, err := ParseFile(strings.NewReader(`
+FROM .
+DRAFT .
+`))
+	require.NoError(t, err)
+
+	_, err = modelfile.CreateRequest(dir)
+	require.ErrorContains(t, err, "DRAFT must not reference the same local path as FROM")
 }
 
 func TestParseFileTrimSpace(t *testing.T) {
@@ -227,6 +286,44 @@ PARSER parser1
 	require.NoError(t, err)
 
 	assert.Equal(t, []Command{{Name: "model", Args: "foo"}, {Name: "parser", Args: "parser1"}}, modelfile.Commands)
+}
+
+func TestModelfileCapabilities(t *testing.T) {
+	for _, input := range []string{
+		"FROM base\nCAPABILITY decision\nCAPABILITY tools\n",
+		"FROM base\ncapability decision\nCAPABILITY \"tools\"",
+	} {
+		mf, err := ParseFile(strings.NewReader(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := mf.CreateRequest(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff([]string{"decision", "tools"}, req.Capabilities); diff != "" {
+			t.Fatalf("capabilities (-want +got):\n%s", diff)
+		}
+		roundtrip, err := ParseFile(strings.NewReader(mf.String()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(mf, roundtrip); diff != "" {
+			t.Fatalf("Modelfile roundtrip (-want +got):\n%s", diff)
+		}
+	}
+}
+
+func TestModelfileRejectsUnknownCapability(t *testing.T) {
+	for _, capability := range []string{"system-one", "decision tools", `""`} {
+		mf, err := ParseFile(strings.NewReader("FROM base\nCAPABILITY " + capability + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mf.CreateRequest(t.TempDir()); err == nil || !strings.Contains(err.Error(), "unknown capability") {
+			t.Fatalf("capability %q: got %v, want unknown capability", capability, err)
+		}
+	}
 }
 
 func TestParseFileMessages(t *testing.T) {
@@ -781,46 +878,21 @@ MESSAGE assistant Hi! How are you?
 	}
 }
 
-func getSHA256Digest(t *testing.T, r io.Reader) (string, int64) {
+func createTestFile(t *testing.T, contents string) (string, string) {
 	t.Helper()
 
-	h := sha256.New()
-	n, err := io.Copy(h, r)
-	if err != nil {
+	path := filepath.Join(t.TempDir(), "model.gguf")
+	data := []byte(contents)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	return fmt.Sprintf("sha256:%x", h.Sum(nil)), n
-}
-
-func createBinFile(t *testing.T, kv map[string]any, ti []*ggml.Tensor) (string, string) {
-	t.Helper()
-
-	f, err := os.CreateTemp(t.TempDir(), "testbin.*.gguf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-
-	var base convert.KV = map[string]any{"general.architecture": "test"}
-	maps.Copy(base, kv)
-
-	if err := ggml.WriteGGUF(f, base, ti); err != nil {
-		t.Fatal(err)
-	}
-	// Calculate sha256 of file
-	if _, err := f.Seek(0, 0); err != nil {
-		t.Fatal(err)
-	}
-
-	digest, _ := getSHA256Digest(t, f)
-
-	return f.Name(), digest
+	digest := sha256.Sum256(data)
+	return path, fmt.Sprintf("sha256:%x", digest)
 }
 
 func TestCreateRequestFiles(t *testing.T) {
-	n1, d1 := createBinFile(t, nil, nil)
-	n2, d2 := createBinFile(t, map[string]any{"foo": "bar"}, nil)
+	n1, d1 := createTestFile(t, "first")
+	n2, d2 := createTestFile(t, "second")
 
 	cases := []struct {
 		input    string
@@ -858,6 +930,148 @@ func TestCreateRequestFiles(t *testing.T) {
 	}
 }
 
+func TestCreateRequestFileGlob(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"model-00001-of-00002.gguf": "first",
+		"model-00002-of-00002.gguf": "second",
+		"projector.gguf":            "projector",
+	}
+	want := make(map[string]string)
+	for name, contents := range files {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(name, "model-") {
+			digest := sha256.Sum256([]byte(contents))
+			want[path] = fmt.Sprintf("sha256:%x", digest)
+		}
+	}
+
+	modelfile, err := ParseFile(strings.NewReader("FROM ./model-*.gguf\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := modelfile.CreateRequest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, req.Files); diff != "" {
+		t.Errorf("files mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCreateRequestDraftFileGlob(t *testing.T) {
+	dir := t.TempDir()
+	want := make(map[string]string)
+	for i, contents := range []string{"first", "second"} {
+		path := filepath.Join(dir, fmt.Sprintf("draft-%05d-of-00002.gguf", i+1))
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256([]byte(contents))
+		want[path] = fmt.Sprintf("sha256:%x", digest)
+	}
+
+	modelfile, err := ParseFile(strings.NewReader("FROM base\nDRAFT ./draft-*.gguf\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := modelfile.CreateRequest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, req.DraftFiles); diff != "" {
+		t.Errorf("draft files mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCreateRequestFileGlobNoMatchUsesModelName(t *testing.T) {
+	// Bracket patterns are legal filenames on Windows, unlike literal '*'.
+	const ref = "model-[0-9].gguf"
+	modelfile, err := ParseFile(strings.NewReader("FROM " + ref + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := modelfile.CreateRequest(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.From != ref {
+		t.Fatalf("from = %q, want %q", req.From, ref)
+	}
+	if len(req.Files) != 0 {
+		t.Fatalf("files = %v, want none", req.Files)
+	}
+}
+
+func TestCreateRequestFileGlobRejectsBadPattern(t *testing.T) {
+	modelfile, err := ParseFile(strings.NewReader("FROM [\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := modelfile.CreateRequest(t.TempDir()); !errors.Is(err, filepath.ErrBadPattern) {
+		t.Fatalf("CreateRequest() error = %v, want %v", err, filepath.ErrBadPattern)
+	}
+}
+
+func parserIdentityONNX() []byte {
+	field := func(number int, data []byte) []byte {
+		result := binary.AppendUvarint(nil, uint64(number<<3|2))
+		result = binary.AppendUvarint(result, uint64(len(data)))
+		return append(result, data...)
+	}
+	value := func(name string) []byte {
+		tensor := append([]byte{8, 1}, field(2, field(1, []byte{8, 1}))...)
+		return append(field(1, []byte(name)), field(2, field(1, tensor))...)
+	}
+	node := append(field(1, []byte("input")), field(2, []byte("output"))...)
+	node = append(node, field(4, []byte("Identity"))...)
+	graph := append(field(1, node), field(2, []byte("identity"))...)
+	graph = append(graph, field(11, value("input"))...)
+	graph = append(graph, field(12, value("output"))...)
+	model := append([]byte{8, 8}, field(7, graph)...)
+	return append(model, field(8, []byte{16, 13})...)
+}
+
+func TestFilesForModelNestedORTArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	want := make(map[string]string)
+	for name, content := range map[string][]byte{
+		"nested/decoder/model.onnx": parserIdentityONNX(),
+		"nested/decoder/weights":    {0, 1, 2},
+		"nested/context.cache":      {3, 4, 5},
+		"genai_config.json":         []byte(`{"model":{"type":"llama","context_length":128,"vocab_size":8,"decoder":{"filename":"nested/decoder/model.onnx"}}}`),
+		"tokenizer.json":            []byte(`{"version":"1.0"}`),
+	} {
+		filename := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		filename, err := filepath.EvalSymlinks(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(content)
+		want[filename] = fmt.Sprintf("sha256:%x", digest)
+	}
+	modelfile, err := ParseFile(strings.NewReader("FROM .\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := modelfile.CreateRequest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, request.Files); diff != "" {
+		t.Fatalf("nested ORT files mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestFilesForModel(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -874,6 +1088,7 @@ func TestFilesForModel(t *testing.T) {
 					"model-00002-of-00002.safetensors",
 					"config.json",
 					"tokenizer.json",
+					"chat_template.jinja",
 				}
 				for _, file := range files {
 					if err := os.WriteFile(filepath.Join(dir, file), []byte("test content"), 0o644); err != nil {
@@ -887,6 +1102,7 @@ func TestFilesForModel(t *testing.T) {
 				"model-00002-of-00002.safetensors",
 				"config.json",
 				"tokenizer.json",
+				"chat_template.jinja",
 			},
 		},
 		{
@@ -918,6 +1134,38 @@ func TestFilesForModel(t *testing.T) {
 				"config.json",
 				"tokenizer.json",
 				"tokenizer.model",
+			},
+		},
+		{
+			name: "safetensors sentence transformers module weights",
+			setup: func(dir string) error {
+				files := []string{
+					"model.safetensors",
+					"config.json",
+					"modules.json",
+					filepath.Join("2_Dense", "config.json"),
+					filepath.Join("2_Dense", "model.safetensors"),
+					filepath.Join("3_Dense", "config.json"),
+					filepath.Join("3_Dense", "model.safetensors"),
+				}
+				for _, file := range files {
+					if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, file)), 0o755); err != nil {
+						return err
+					}
+					if err := os.WriteFile(filepath.Join(dir, file), []byte("test content"), 0o644); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			wantFiles: []string{
+				"model.safetensors",
+				"config.json",
+				"modules.json",
+				filepath.Join("2_Dense", "config.json"),
+				filepath.Join("2_Dense", "model.safetensors"),
+				filepath.Join("3_Dense", "config.json"),
+				filepath.Join("3_Dense", "model.safetensors"),
 			},
 		},
 		{
@@ -1086,7 +1334,7 @@ func TestFilesForModel(t *testing.T) {
 			name: "onnx model with external data files",
 			setup: func(dir string) error {
 				files := map[string][]byte{
-					"model.onnx":        []byte("dummy onnx"),
+					"model.onnx":        parserIdentityONNX(),
 					"model.onnx.data":   {0, 1, 2, 3},
 					"genai_config.json": []byte("{}"),
 					"tokenizer.json":    []byte("{}"),
@@ -1109,7 +1357,7 @@ func TestFilesForModel(t *testing.T) {
 			name: "onnx model with sharded external data files",
 			setup: func(dir string) error {
 				files := map[string][]byte{
-					"model.onnx":            []byte("dummy onnx"),
+					"model.onnx":            parserIdentityONNX(),
 					"model.onnx.data_00000": {0, 1},
 					"model.onnx.data_00001": {2, 3},
 					"genai_config.json":     []byte("{}"),

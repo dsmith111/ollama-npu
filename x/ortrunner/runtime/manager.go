@@ -1,14 +1,16 @@
 package runtime
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
-// Provider constants for execution provider selection.
 const (
 	ProviderAuto = "auto"
 	ProviderQNN  = "qnn"
@@ -16,151 +18,206 @@ const (
 	ProviderCPU  = "cpu"
 )
 
-// InstallConfig controls runtime installation behavior.
+// InstallConfig controls acquisition. PackageDir selects offline-only acquisition
+// from <lowercase-package-id>.<version>.nupkg files. Dir overrides InstallDir.
+// Force revalidates but never deletes or overwrites an existing installation.
 type InstallConfig struct {
-	Provider string // auto, qnn, dml, cpu
-	Force    bool   // reinstall even if present
+	Provider   string
+	Force      bool
+	Dir        string
+	PackageDir string
+	Context    context.Context
 }
 
-// InstallResult reports the outcome of a runtime installation.
+// Config and Setup retain compatibility with callers using the setup API.
+type Config = InstallConfig
+
 type InstallResult struct {
-	Dir       string // final installation directory
-	Provider  string // resolved provider
-	Installed bool   // true if new files were installed (false if already present)
-	Validated bool   // true if validation passed
-	Message   string // human-readable status
+	Dir       string           `json:"dir"`
+	Provider  string           `json:"provider"`
+	Installed bool             `json:"installed"`
+	Validated bool             `json:"validated"` // file integrity only, not device/driver readiness
+	Message   string           `json:"message"`
+	Report    ValidationReport `json:"report"`
 }
 
-// DefaultInstallDir returns the standard per-user install directory for ORT GenAI runtimes.
-// On Windows: %LOCALAPPDATA%\Ollama\runtimes\ortgenai\win-arm64-qnn\<genaiVer>_<ortVer>
-func DefaultInstallDir() string {
+var ErrUnsafeReplacement = errors.New("refusing to replace an existing runtime installation")
+
+// InstallDir returns the immutable, versioned per-user QNN installation path.
+func InstallDir() string {
 	if runtime.GOOS != "windows" {
 		return ""
 	}
-
-	localAppData := os.Getenv("LOCALAPPDATA")
-	if localAppData == "" {
+	base := os.Getenv("LOCALAPPDATA")
+	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return ""
 		}
-		localAppData = filepath.Join(home, "AppData", "Local")
+		base = filepath.Join(home, "AppData", "Local")
 	}
-
-	return filepath.Join(
-		localAppData,
-		"Ollama", "runtimes", "ortgenai",
-		fmt.Sprintf("win-arm64-qnn"),
-		fmt.Sprintf("%s_%s", PinnedGenAIVersion, PinnedORTVersion),
-	)
+	return filepath.Join(base, "Ollama", "runtimes", "ortgenai", "win-arm64-qnn",
+		PinnedGenAIVersion+"_"+PinnedORTVersion)
 }
 
-// IsInstalled checks if a valid runtime installation exists at the default directory.
+func DefaultInstallDir() string { return InstallDir() }
+
+// SearchDirs shares the loader/diagnostic search order without changing PATH.
+// Callers must validate a directory before loading native code from it.
+func SearchDirs() []string {
+	dirs := filepath.SplitList(os.Getenv("OLLAMA_ORT_PATH"))
+	dirs = append(dirs, InstallDir())
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		dirs = append(dirs, filepath.Dir(exe))
+	}
+	var out []string
+	seen := make(map[string]bool)
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		dir = filepath.Clean(dir)
+		key := dir
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if !seen[key] {
+			out = append(out, dir)
+			seen[key] = true
+		}
+	}
+	return out
+}
+
 func IsInstalled() bool {
-	dir := DefaultInstallDir()
+	dir := InstallDir()
 	if dir == "" {
 		return false
 	}
-
-	// Check for the key DLL
-	if _, err := os.Stat(filepath.Join(dir, "onnxruntime-genai.dll")); err != nil {
-		return false
-	}
-	if _, err := os.Stat(filepath.Join(dir, "onnxruntime.dll")); err != nil {
-		return false
-	}
-	return true
+	report, err := ValidateInstallDir(dir)
+	return err == nil && report.Valid
 }
 
-// Install downloads and installs the ORT GenAI runtime bundle.
+func Setup(cfg Config) (*InstallResult, error) { return Install(cfg) }
+
 func Install(cfg InstallConfig) (*InstallResult, error) {
-	if runtime.GOOS != "windows" || runtime.GOARCH != "arm64" {
-		return nil, fmt.Errorf("ORT GenAI NPU runtime is only supported on Windows arm64")
+	ctx := cfg.Context
+	if ctx == nil {
+		ctx = context.Background()
 	}
-
-	provider := cfg.Provider
-	if provider == "" || provider == ProviderAuto {
-		provider = ProviderQNN
-	}
-
-	dir := DefaultInstallDir()
-	if dir == "" {
-		return nil, fmt.Errorf("unable to determine install directory (LOCALAPPDATA not set)")
-	}
-
-	// Check existing installation
-	if !cfg.Force && IsInstalled() {
-		slog.Info("ORT GenAI runtime already installed", "dir", dir)
-		return &InstallResult{
-			Dir:       dir,
-			Provider:  provider,
-			Installed: false,
-			Validated: true,
-			Message:   "Runtime already installed",
-		}, nil
-	}
-
-	slog.Info("installing ORT GenAI runtime", "dir", dir, "provider", provider)
-
-	// Atomic install: download to temp dir, validate, then rename to final
-	tempDir, err := os.MkdirTemp(filepath.Dir(dir), ".ortgenai-install-*")
-	if err != nil {
-		// Parent dir may not exist yet — create it
-		if mkErr := os.MkdirAll(filepath.Dir(dir), 0o755); mkErr != nil {
-			return nil, fmt.Errorf("failed to create parent directory: %w", mkErr)
-		}
-		tempDir, err = os.MkdirTemp(filepath.Dir(dir), ".ortgenai-install-*")
-		if err != nil {
-			return nil, fmt.Errorf("failed to create temp directory: %w", err)
-		}
-	}
-	defer os.RemoveAll(tempDir) // cleanup on failure
-
-	// Download and extract NuGet packages
-	for _, pkg := range PinnedPackages {
-		slog.Info("downloading NuGet package", "id", pkg.ID, "version", pkg.Version)
-		if err := DownloadAndExtractNuGet(pkg, tempDir); err != nil {
-			return nil, fmt.Errorf("failed to install %s: %w", pkg.ID, err)
-		}
-	}
-
-	// Validate the installation
-	if err := validateInstallDir(tempDir); err != nil {
-		return nil, fmt.Errorf("validation failed after extraction: %w", err)
-	}
-
-	// Atomic rename: remove existing dir and move temp into place
-	if cfg.Force {
-		os.RemoveAll(dir)
-	}
-	if err := os.Rename(tempDir, dir); err != nil {
-		// On Windows, rename can fail if the target exists. Try remove+rename.
-		os.RemoveAll(dir)
-		if err := os.Rename(tempDir, dir); err != nil {
-			return nil, fmt.Errorf("failed to finalize install directory: %w", err)
-		}
-	}
-
-	slog.Info("ORT GenAI runtime installed successfully", "dir", dir)
-	return &InstallResult{
-		Dir:       dir,
-		Provider:  provider,
-		Installed: true,
-		Validated: true,
-		Message:   "Runtime installed successfully",
-	}, nil
+	return InstallContext(ctx, cfg)
 }
 
-// validateInstallDir checks that the essential DLLs are present in a directory.
-func validateInstallDir(dir string) error {
-	required := []string{
-		"onnxruntime.dll",
-		"onnxruntime-genai.dll",
+func SetupContext(ctx context.Context, cfg Config) (*InstallResult, error) {
+	return InstallContext(ctx, cfg)
+}
+
+func InstallContext(ctx context.Context, cfg InstallConfig) (*InstallResult, error) {
+	if runtime.GOOS != "windows" || runtime.GOARCH != "arm64" {
+		return nil, fmt.Errorf("ORT GenAI QNN acquisition requires Windows ARM64")
 	}
-	for _, dll := range required {
-		if _, err := os.Stat(filepath.Join(dir, dll)); err != nil {
-			return fmt.Errorf("required DLL missing: %s", dll)
+	client := downloadClient()
+	defer client.CloseIdleConnections()
+	return install(ctx, cfg, approvedPackages(), client, nugetDownloadURL)
+}
+
+func install(ctx context.Context, cfg InstallConfig, specs []packageSpec, client *http.Client, urlFor func(NuGetPackage) string) (*InstallResult, error) {
+	if ctx == nil {
+		return nil, errors.New("nil installation context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if cfg.Provider != "" && cfg.Provider != ProviderAuto && cfg.Provider != ProviderQNN {
+		return nil, fmt.Errorf("provider %q is not supported by the pinned QNN bundle", cfg.Provider)
+	}
+	dir := cfg.Dir
+	if dir == "" {
+		dir = InstallDir()
+	}
+	if dir == "" {
+		return nil, errors.New("unable to determine runtime installation directory")
+	}
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	parent := filepath.Dir(dir)
+	if dir == parent {
+		return nil, errors.New("runtime installation cannot be a filesystem root")
+	}
+	if err := makeSafeDir(parent); err != nil {
+		return nil, fmt.Errorf("installation parent: %w", err)
+	}
+	unlock, err := acquireInstallLock(ctx, dir+".lock")
+	if err != nil {
+		return nil, fmt.Errorf("installation lock: %w", err)
+	}
+	defer unlock()
+
+	if _, err := os.Lstat(dir); err == nil {
+		report, validationErr := validate(ctx, dir, specs)
+		result := &InstallResult{Dir: dir, Provider: ProviderQNN, Validated: report.Valid, Report: report}
+		if validationErr != nil {
+			result.Message = "Existing runtime is invalid; no files were changed"
+			return result, fmt.Errorf("%w: %s; use a new empty directory or explicitly quarantine it after stopping all users: %w", ErrUnsafeReplacement, dir, validationErr)
+		}
+		result.Message = "Runtime already verified; immutable installation retained"
+		return result, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect installation: %w", err)
+	}
+
+	stage, err := os.MkdirTemp(parent, ".ortgenai-install-")
+	if err != nil {
+		return nil, fmt.Errorf("create staging directory: %w", err)
+	}
+	defer os.RemoveAll(stage)
+	manifest := newManifest(specs)
+	for _, spec := range specs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if cfg.PackageDir != "" {
+			path := filepath.Join(cfg.PackageDir, packageFilename(spec.Package))
+			if err := verifyPackage(ctx, path, spec.Package); err != nil {
+				return nil, fmt.Errorf("offline package %s: %w", spec.Package.ID, err)
+			}
+			if err := extractPackage(ctx, path, stage, spec); err != nil {
+				return nil, fmt.Errorf("extract %s: %w", spec.Package.ID, err)
+			}
+		} else {
+			if err := acquirePackage(ctx, client, urlFor(spec.Package), spec, stage); err != nil {
+				return nil, fmt.Errorf("acquire %s: %w", spec.Package.ID, err)
+			}
 		}
 	}
-	return nil
+	if err := writeManifest(stage, manifest); err != nil {
+		return nil, err
+	}
+	report, err := validate(ctx, stage, specs)
+	if err != nil {
+		return nil, fmt.Errorf("staging validation: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Never remove a destination: an installer not respecting our lock may have
+	// created it, and Windows DLLs may already be loaded from that directory.
+	if _, err := os.Lstat(dir); err == nil {
+		return nil, fmt.Errorf("%w: destination appeared during acquisition", ErrUnsafeReplacement)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if err := os.Rename(stage, dir); err != nil {
+		return nil, fmt.Errorf("atomic promotion (destination was not removed): %w", err)
+	}
+	report.Dir = dir
+	return &InstallResult{
+		Dir: dir, Provider: ProviderQNN, Installed: true, Validated: true, Report: report,
+		Message: "Pinned runtime files verified; QNN device and driver readiness not tested",
+	}, nil
 }

@@ -41,9 +41,18 @@ OgaResult* (*OgaGeneratorParamsSetSearchBool_)(OgaGeneratorParams* params, const
 OgaResult* (*OgaCreateGenerator_)(const OgaModel* model, const OgaGeneratorParams* params, OgaGenerator** out) = NULL;
 void (*OgaDestroyGenerator_)(OgaGenerator* generator) = NULL;
 OgaResult* (*OgaGenerator_AppendTokenSequences_)(OgaGenerator* generator, const OgaSequences* sequences) = NULL;
+OgaResult* (*OgaGenerator_AppendTokens_)(OgaGenerator* generator, const int32_t* tokens, size_t count) = NULL;
+OgaResult* (*OgaGenerator_SetRuntimeOption_)(OgaGenerator* generator, const char* key, const char* value) = NULL;
 OgaResult* (*OgaGenerator_GenerateNextToken_)(OgaGenerator* generator) = NULL;
 bool (*OgaGenerator_IsDone_)(OgaGenerator* generator) = NULL;
 OgaResult* (*OgaGenerator_GetNextTokens_)(const OgaGenerator* generator, const int32_t** out, size_t* out_count) = NULL;
+OgaResult* (*OgaGenerator_GetLogits_)(OgaGenerator*, OgaTensor**) = NULL;
+OgaResult* (*OgaGenerator_SetLogits_)(OgaGenerator*, OgaTensor*) = NULL;
+void (*OgaDestroyTensor_)(OgaTensor*) = NULL;
+OgaResult* (*OgaTensorGetType_)(OgaTensor*, OgaElementType*) = NULL;
+OgaResult* (*OgaTensorGetShapeRank_)(OgaTensor*, size_t*) = NULL;
+OgaResult* (*OgaTensorGetShape_)(OgaTensor*, int64_t*, size_t) = NULL;
+OgaResult* (*OgaTensorGetData_)(OgaTensor*, void**) = NULL;
 
 // Error handling
 const char* (*OgaResultGetError_)(const OgaResult* result) = NULL;
@@ -91,9 +100,18 @@ int oga_dynamic_load_symbols(oga_dynamic_handle handle) {
     CHECK_LOAD(handle, OgaCreateGenerator);
     CHECK_LOAD(handle, OgaDestroyGenerator);
     CHECK_LOAD(handle, OgaGenerator_AppendTokenSequences);
+    CHECK_LOAD(handle, OgaGenerator_AppendTokens);
+    *(void**)(&OgaGenerator_SetRuntimeOption_) = DLSYM(handle, "OgaGenerator_SetRuntimeOption");
     CHECK_LOAD(handle, OgaGenerator_GenerateNextToken);
     CHECK_LOAD(handle, OgaGenerator_IsDone);
     CHECK_LOAD(handle, OgaGenerator_GetNextTokens);
+    *(void**)(&OgaGenerator_GetLogits_) = DLSYM(handle, "OgaGenerator_GetLogits");
+    *(void**)(&OgaGenerator_SetLogits_) = DLSYM(handle, "OgaGenerator_SetLogits");
+    *(void**)(&OgaDestroyTensor_) = DLSYM(handle, "OgaDestroyTensor");
+    *(void**)(&OgaTensorGetType_) = DLSYM(handle, "OgaTensorGetType");
+    *(void**)(&OgaTensorGetShapeRank_) = DLSYM(handle, "OgaTensorGetShapeRank");
+    *(void**)(&OgaTensorGetShape_) = DLSYM(handle, "OgaTensorGetShape");
+    *(void**)(&OgaTensorGetData_) = DLSYM(handle, "OgaTensorGetData");
 
     // Error handling
     CHECK_LOAD(handle, OgaResultGetError);

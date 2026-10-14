@@ -2,178 +2,410 @@ package runtime
 
 import (
 	"archive/zip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
-	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+	"unicode/utf8"
 )
 
-// NuGetPackage describes a pinned NuGet package to download.
 type NuGetPackage struct {
-	ID      string // NuGet package ID
-	Version string // Exact version
-	SHA256  string // Expected SHA-256 hash of the .nupkg (empty to skip verification)
+	ID      string
+	Version string
+	SHA256  string // mandatory SHA-256 of the exact .nupkg
+	Size    int64  // exact size when known
 }
 
-// Pinned known-good versions. Bump these for updates.
 const (
 	PinnedGenAIVersion = "0.12.2"
 	PinnedORTVersion   = "1.24.1"
+	maxPackageSize     = 128 << 20
+	maxFileSize        = 256 << 20
+	maxExpandedSize    = 1 << 30
+	maxZIPEntries      = 4096
+	downloadTimeout    = 5 * time.Minute
+	nativePrefix       = "runtimes/win-arm64/native/"
 )
 
-// PinnedPackages lists the NuGet packages needed for QNN NPU inference.
-var PinnedPackages = []NuGetPackage{
-	{
-		ID:      "Microsoft.ML.OnnxRuntimeGenAI.QNN",
-		Version: PinnedGenAIVersion,
-	},
-	{
-		ID:      "Microsoft.ML.OnnxRuntime.QNN",
-		Version: PinnedORTVersion,
-	},
-}
+// PinnedPackages is informational. Acquisition uses a private fresh copy, so
+// mutating this compatibility variable cannot weaken the trust anchors.
+var PinnedPackages = pinnedPackages()
 
-// nugetDownloadURL constructs the NuGet v3 flat-container download URL.
-func nugetDownloadURL(pkg NuGetPackage) string {
-	lower := strings.ToLower(pkg.ID)
-	return fmt.Sprintf("https://api.nuget.org/v3-flatcontainer/%s/%s/%s.%s.nupkg",
-		lower, pkg.Version, lower, pkg.Version)
-}
-
-// DownloadAndExtractNuGet downloads a NuGet package and extracts the
-// runtimes/win-arm64/native/** tree into destDir.
-// It skips .lib and .pdb files, and verifies the SHA256 hash if provided.
-func DownloadAndExtractNuGet(pkg NuGetPackage, destDir string) error {
-	url := nugetDownloadURL(pkg)
-	slog.Info("downloading NuGet package", "url", url)
-
-	// Download to a temp file
-	tmpFile, err := os.CreateTemp("", "ollama-nupkg-*.zip")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+// Hashes reproduced from separate official NuGet v2 and globalcdn downloads,
+// 2026-10-06. These are hashes of the entire signed .nupkg, not unpacked ZIPs.
+func pinnedPackages() []NuGetPackage {
+	return []NuGetPackage{
+		{"Microsoft.ML.OnnxRuntimeGenAI.QNN", PinnedGenAIVersion, "a77f31d2458a5d4d57fb4920ae8f65ab53258899c4fe1f6fe897a078650eec19", 2309592},
+		{"Microsoft.ML.OnnxRuntime.QNN", PinnedORTVersion, "27e0a4a1ea9f9f8348ab183ca4886195b655bf3543cf1c9938733fc6d6b42796", 96523158},
 	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
+}
 
-	resp, err := http.Get(url)
+func packageFilename(pkg NuGetPackage) string {
+	return strings.ToLower(pkg.ID) + "." + pkg.Version + ".nupkg"
+}
+
+func nugetDownloadURL(pkg NuGetPackage) string {
+	return "https://www.nuget.org/api/v2/package/" + url.PathEscape(pkg.ID) + "/" + url.PathEscape(pkg.Version)
+}
+
+func downloadClient() *http.Client {
+	return &http.Client{
+		Timeout: downloadTimeout,
+		Transport: &http.Transport{
+			Proxy:               http.ProxyFromEnvironment,
+			DialContext:         (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: 30 * time.Second,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			host := strings.ToLower(req.URL.Hostname())
+			if len(via) >= 5 || req.URL.Scheme != "https" || req.URL.User != nil ||
+				(req.URL.Port() != "" && req.URL.Port() != "443") ||
+				(host != "www.nuget.org" && host != "api.nuget.org" && host != "globalcdn.nuget.org") {
+				return errors.New("unsafe NuGet redirect")
+			}
+			return nil
+		},
+	}
+}
+
+// DownloadAndExtractNuGet writes one approved package into a caller-owned staging
+// directory, without replacing any file. Use Install for atomic bundle promotion.
+func DownloadAndExtractNuGet(pkg NuGetPackage, destDir string) error {
+	return DownloadAndExtractNuGetContext(context.Background(), pkg, destDir)
+}
+
+func DownloadAndExtractNuGetContext(ctx context.Context, pkg NuGetPackage, destDir string) error {
+	if ctx == nil {
+		return errors.New("nil acquisition context")
+	}
+	for _, spec := range approvedPackages() {
+		if pkg == spec.Package {
+			if err := makeSafeDir(destDir); err != nil {
+				return err
+			}
+			client := downloadClient()
+			defer client.CloseIdleConnections()
+			return acquirePackage(ctx, client, nugetDownloadURL(pkg), spec, destDir)
+		}
+	}
+	return errors.New("package is not an exact approved pin (including SHA256 and size)")
+}
+
+func acquirePackage(ctx context.Context, client *http.Client, url string, spec packageSpec, destDir string) error {
+	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	defer cancel()
+	tmp, err := os.CreateTemp(destDir, ".nupkg-")
 	if err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("download %s: %w", pkg.ID, err)
+		return err
+	}
+	path := tmp.Name()
+	defer os.Remove(path)
+	err = downloadPackage(ctx, client, url, spec.Package, tmp)
+	closeErr := tmp.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return extractPackage(ctx, path, destDir, spec)
+}
+
+func downloadPackage(ctx context.Context, client *http.Client, url string, pkg NuGetPackage, out *os.File) error {
+	if err := checkPackagePin(pkg); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("download: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		tmpFile.Close()
-		return fmt.Errorf("download %s: HTTP %d", pkg.ID, resp.StatusCode)
+		return fmt.Errorf("download: HTTP %d", resp.StatusCode)
 	}
-
-	// Hash while downloading
-	hasher := sha256.New()
-	writer := io.MultiWriter(tmpFile, hasher)
-	if _, err := io.Copy(writer, resp.Body); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("download %s: %w", pkg.ID, err)
+	if resp.ContentLength > maxPackageSize || (pkg.Size > 0 && resp.ContentLength >= 0 && resp.ContentLength != pkg.Size) {
+		return fmt.Errorf("unexpected package Content-Length %d", resp.ContentLength)
 	}
-	tmpFile.Close()
-
-	// Verify hash if provided
-	if pkg.SHA256 != "" {
-		actual := hex.EncodeToString(hasher.Sum(nil))
-		if !strings.EqualFold(actual, pkg.SHA256) {
-			return fmt.Errorf("SHA256 mismatch for %s: expected %s, got %s", pkg.ID, pkg.SHA256, actual)
-		}
-		slog.Info("SHA256 verified", "package", pkg.ID)
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(out, h), io.LimitReader(contextReader{ctx, resp.Body}, packageSizeLimit(pkg)+1))
+	if err != nil {
+		return fmt.Errorf("download body: %w", err)
 	}
-
-	// Extract runtimes/win-arm64/native/** from the nupkg (which is a ZIP)
-	return extractNativeFiles(tmpPath, destDir)
+	if err := checkDigest(pkg, n, hex.EncodeToString(h.Sum(nil))); err != nil {
+		return err
+	}
+	return out.Sync()
 }
 
-// extractNativeFiles opens a .nupkg (ZIP) and extracts files from
-// runtimes/win-arm64/native/ into destDir, skipping .lib and .pdb files.
-func extractNativeFiles(zipPath, destDir string) error {
+func checkPackagePin(pkg NuGetPackage) error {
+	hash, err := hex.DecodeString(pkg.SHA256)
+	if err != nil || len(hash) != sha256.Size {
+		return errors.New("a valid expected package SHA256 is required")
+	}
+	if pkg.Size < 0 || pkg.Size > maxPackageSize {
+		return errors.New("invalid expected package size")
+	}
+	return nil
+}
+
+func packageSizeLimit(pkg NuGetPackage) int64 {
+	if pkg.Size > 0 {
+		return pkg.Size
+	}
+	return maxPackageSize
+}
+
+func checkDigest(pkg NuGetPackage, size int64, actual string) error {
+	if size > maxPackageSize || (pkg.Size > 0 && size != pkg.Size) {
+		return fmt.Errorf("package size mismatch: got %d, expected %d (maximum %d)", size, pkg.Size, maxPackageSize)
+	}
+	if !strings.EqualFold(actual, pkg.SHA256) {
+		return fmt.Errorf("package SHA256 mismatch: expected %s, got %s", pkg.SHA256, actual)
+	}
+	return nil
+}
+
+func verifyPackage(ctx context.Context, path string, pkg NuGetPackage) error {
+	if err := checkPackagePin(pkg); err != nil {
+		return err
+	}
+	f, err := openRegular(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(contextReader{ctx, f}, packageSizeLimit(pkg)+1))
+	if err != nil {
+		return err
+	}
+	return checkDigest(pkg, n, hex.EncodeToString(h.Sum(nil)))
+}
+
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.r.Read(p)
+}
+
+func extractPackage(ctx context.Context, zipPath, destDir string, spec packageSpec) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return fmt.Errorf("open nupkg: %w", err)
 	}
 	defer r.Close()
-
-	const prefix = "runtimes/win-arm64/native/"
-	extracted := 0
-
+	if err := preflightZIP(r.File); err != nil {
+		return err
+	}
+	expected := make(map[string]approvedFile)
+	for _, file := range spec.Files {
+		expected[file.Source] = file
+	}
+	selected := make(map[string]*zip.File)
 	for _, f := range r.File {
-		// Normalize to forward slashes for comparison
-		name := strings.ReplaceAll(f.Name, "\\", "/")
-
-		if !strings.HasPrefix(name, prefix) {
-			continue
+		if file, ok := expected[f.Name]; ok {
+			if f.FileInfo().IsDir() || f.UncompressedSize64 != uint64(file.Size) {
+				return fmt.Errorf("invalid approved entry size/type: %s", f.Name)
+			}
+			selected[f.Name] = f
+		} else if strings.HasPrefix(strings.ToLower(f.Name), nativePrefix) && !f.FileInfo().IsDir() {
+			ext := strings.ToLower(filepath.Ext(f.Name))
+			if ext != ".lib" && ext != ".pdb" {
+				return fmt.Errorf("unapproved native entry: %s", f.Name)
+			}
 		}
-
-		// Get the relative path within the native directory
-		relPath := strings.TrimPrefix(name, prefix)
-		if relPath == "" || strings.HasSuffix(relPath, "/") {
-			continue // skip directory entries
-		}
-
-		// Skip .lib and .pdb files
-		ext := strings.ToLower(filepath.Ext(relPath))
-		if ext == ".lib" || ext == ".pdb" {
-			slog.Debug("skipping non-runtime file", "file", relPath)
-			continue
-		}
-
-		// Security: prevent path traversal
-		destPath := filepath.Join(destDir, filepath.FromSlash(relPath))
-		if !strings.HasPrefix(filepath.Clean(destPath), filepath.Clean(destDir)+string(filepath.Separator)) {
-			slog.Warn("skipping file with suspicious path", "file", relPath)
-			continue
-		}
-
-		// Create parent directories
-		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-			return fmt.Errorf("mkdir for %s: %w", relPath, err)
-		}
-
-		if err := extractZipFile(f, destPath); err != nil {
-			return fmt.Errorf("extract %s: %w", relPath, err)
-		}
-
-		slog.Debug("extracted", "file", relPath)
-		extracted++
 	}
-
-	if extracted == 0 {
-		return fmt.Errorf("no native files found in package (expected files under %s)", prefix)
+	for _, file := range spec.Files {
+		if selected[file.Source] == nil {
+			return fmt.Errorf("required package entry missing: %s", file.Source)
+		}
 	}
-
-	slog.Info("extracted native files", "count", extracted)
+	if err := makeSafeDir(destDir); err != nil {
+		return err
+	}
+	for _, file := range spec.Files {
+		destPath := filepath.Join(destDir, filepath.FromSlash(file.Path))
+		if err := makeSafeDir(filepath.Dir(destPath)); err != nil {
+			return err
+		}
+		if err := extractZIPFile(ctx, selected[file.Source], destPath, file); err != nil {
+			return fmt.Errorf("extract %s: %w", file.Source, err)
+		}
+		if err := validateNative(destPath); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// extractZipFile writes a single ZIP file entry to disk.
-func extractZipFile(f *zip.File, destPath string) error {
-	rc, err := f.Open()
-	if err != nil {
-		return err
+func preflightZIP(files []*zip.File) error {
+	if len(files) == 0 || len(files) > maxZIPEntries {
+		return errors.New("ZIP entry count outside permitted bounds")
 	}
-	defer rc.Close()
-
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
+	type entry struct {
+		name      string
+		directory bool
 	}
-	defer out.Close()
-
-	// Limit extraction size to 500MB per file as a safety measure
-	const maxFileSize = 500 << 20
-	if _, err := io.Copy(out, io.LimitReader(rc, maxFileSize)); err != nil {
-		return err
+	seen := make(map[string]entry)
+	var expanded uint64
+	for _, f := range files {
+		if err := safeArchiveName(f.Name); err != nil {
+			return err
+		}
+		mode := f.Mode()
+		if !mode.IsRegular() && !mode.IsDir() {
+			return fmt.Errorf("non-regular ZIP entry: %s", f.Name)
+		}
+		key := strings.ToLower(strings.TrimSuffix(f.Name, "/"))
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("duplicate or case-aliased ZIP entry: %s", f.Name)
+		}
+		seen[key] = entry{strings.TrimSuffix(f.Name, "/"), mode.IsDir()}
+		if f.UncompressedSize64 > maxFileSize || f.CompressedSize64 > maxPackageSize {
+			return fmt.Errorf("oversize ZIP entry: %s", f.Name)
+		}
+		if f.UncompressedSize64 > 1<<20 && (f.CompressedSize64 == 0 || f.UncompressedSize64/f.CompressedSize64 > 250) {
+			return fmt.Errorf("ZIP compression ratio exceeds limit: %s", f.Name)
+		}
+		expanded += f.UncompressedSize64
+		if expanded > maxExpandedSize {
+			return errors.New("ZIP expanded size exceeds limit")
+		}
 	}
-
+	for _, e := range seen {
+		parts := strings.Split(e.name, "/")
+		for i := 1; i < len(parts); i++ {
+			name := strings.Join(parts[:i], "/")
+			if ancestor, ok := seen[strings.ToLower(name)]; ok && (!ancestor.directory || ancestor.name != name) {
+				return fmt.Errorf("ZIP file/directory or case conflict: %s", e.name)
+			}
+		}
+	}
+	// Implicit directories can also alias (e.g. A/a.dll and a/b.dll).
+	dirs := make(map[string]string)
+	for _, e := range seen {
+		parts := strings.Split(e.name, "/")
+		for i := 1; i < len(parts); i++ {
+			name := strings.Join(parts[:i], "/")
+			key := strings.ToLower(name)
+			if old, ok := dirs[key]; ok && old != name {
+				return fmt.Errorf("case-aliased ZIP directory: %s", name)
+			}
+			dirs[key] = name
+		}
+	}
 	return nil
+}
+
+func safeArchiveName(name string) error {
+	if name == "" || !utf8.ValidString(name) || strings.ContainsAny(name, "\\:") || strings.HasPrefix(name, "/") || len(name) > 512 {
+		return fmt.Errorf("unsafe ZIP path: %q", name)
+	}
+	for _, part := range strings.Split(strings.TrimSuffix(name, "/"), "/") {
+		if part == "" || part == "." || part == ".." || strings.TrimRight(part, ". ") != part {
+			return fmt.Errorf("unsafe ZIP path component: %q", name)
+		}
+		for _, c := range part {
+			if c < 32 || c > 126 || strings.ContainsRune("<>\"|?*", c) {
+				return fmt.Errorf("unsafe Windows ZIP path: %q", name)
+			}
+		}
+		base := strings.ToUpper(strings.TrimRight(strings.SplitN(part, ".", 2)[0], " "))
+		if base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" ||
+			(len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '0' && base[3] <= '9') {
+			return fmt.Errorf("reserved Windows ZIP path: %q", name)
+		}
+	}
+	return nil
+}
+
+func extractZIPFile(ctx context.Context, z *zip.File, path string, expected approvedFile) error {
+	in, err := z.Open()
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	h := sha256.New()
+	n, copyErr := io.Copy(io.MultiWriter(out, h), io.LimitReader(contextReader{ctx, in}, expected.Size+1))
+	if copyErr == nil && (n != expected.Size || hex.EncodeToString(h.Sum(nil)) != expected.SHA256) {
+		copyErr = errors.New("installed entry size or SHA256 mismatch")
+	}
+	if copyErr == nil {
+		copyErr = out.Sync()
+	}
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func makeSafeDir(path string) error {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	parent := filepath.Dir(path)
+	if parent != path {
+		if err := makeSafeDir(parent); err != nil {
+			return err
+		}
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(path, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		info, err = os.Lstat(path)
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("not a real directory (links are not allowed): %s", path)
+	}
+	return nil
+}
+
+func openRegular(path string) (*os.File, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	actual, err := f.Stat()
+	if err != nil || !os.SameFile(info, actual) {
+		f.Close()
+		return nil, fmt.Errorf("file changed while opening: %s", path)
+	}
+	return f, nil
 }
