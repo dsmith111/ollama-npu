@@ -17,11 +17,12 @@ import (
 const maxConfigBytes = 4 << 20
 
 type modelMetadata struct {
-	contextLength int
-	eosTokens     []int32
-	stages        []modelStage
-	modelType     string
-	vocabSize     int
+	contextLength         int
+	eosTokens             []int32
+	stages                []modelStage
+	filenames             []string
+	modelType             string
+	vocabSize             int
 	promptPaddingMultiple int
 }
 
@@ -45,7 +46,11 @@ type providerPlan struct {
 }
 
 func readModelMetadata(dir string) (modelMetadata, error) {
-	f, err := os.Open(filepath.Join(dir, "genai_config.json"))
+	return readModelMetadataFile(filepath.Join(dir, "genai_config.json"))
+}
+
+func readModelMetadataFile(filename string) (modelMetadata, error) {
+	f, err := os.Open(filename)
 	if err != nil {
 		return modelMetadata{}, err
 	}
@@ -108,13 +113,13 @@ func parseModelMetadata(data []byte) (modelMetadata, error) {
 		}
 	}
 	var decoder struct {
-		Filename string                       `json:"filename"`
-		Session  json.RawMessage              `json:"session_options"`
-		Pipeline []map[string]json.RawMessage `json:"pipeline"`
+		Filename      string                       `json:"filename"`
+		Session       json.RawMessage              `json:"session_options"`
+		Pipeline      []map[string]json.RawMessage `json:"pipeline"`
 		SlidingWindow *struct {
-			WindowSize int `json:"window_size"`
-			SlideInputs *bool `json:"slide_inputs"`
-			Alignment string `json:"alignment"`
+			WindowSize  int    `json:"window_size"`
+			SlideInputs *bool  `json:"slide_inputs"`
+			Alignment   string `json:"alignment"`
 		} `json:"sliding_window"`
 	}
 	if err := json.Unmarshal(config.Model.Decoder, &decoder); err != nil {
@@ -175,7 +180,54 @@ func parseModelMetadata(data []byte) (modelMetadata, error) {
 			}
 		}
 	}
+	result.filenames, err = ModelFileReferences(data)
+	if err != nil {
+		return result, err
+	}
 	return result, nil
+}
+
+// ModelFileReferences returns every nonempty filename under the model config.
+// Callers apply their own artifact path and graph/provider validation.
+func ModelFileReferences(data []byte) ([]string, error) {
+	var document struct {
+		Model map[string]any `json:"model"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		return nil, err
+	}
+	var filenames []string
+	var visit func(any) error
+	visit = func(value any) error {
+		switch value := value.(type) {
+		case map[string]any:
+			for key, child := range value {
+				if key == "filename" {
+					name, ok := child.(string)
+					if !ok {
+						return fmt.Errorf("model filename references must be strings")
+					}
+					if name != "" {
+						filenames = append(filenames, name)
+					}
+				} else if err := visit(child); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, child := range value {
+				if err := visit(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := visit(document.Model); err != nil {
+		return nil, err
+	}
+	sort.Strings(filenames)
+	return filenames, nil
 }
 
 func parseModelStage(name, filename string, session json.RawMessage, primary bool) (modelStage, error) {

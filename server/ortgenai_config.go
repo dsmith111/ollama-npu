@@ -8,6 +8,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/ollama/ollama/x/ortrunner"
 )
 
 type ortGenAIConfig struct {
@@ -142,44 +144,15 @@ func readORTGenAIConfig(filename string) (ortGenAIConfig, error) {
 	if len(m.Decoder.Pipeline) > 0 && len(stages) == 0 {
 		return result, fmt.Errorf("decoder pipeline requires at least one stage")
 	}
-	var document map[string]any
-	if err := json.Unmarshal(data, &document); err != nil {
+	result.filenames, err = ortrunner.ModelFileReferences(data)
+	if err != nil {
 		return result, err
 	}
-	var visit func(any) error
-	visit = func(value any) error {
-		switch value := value.(type) {
-		case map[string]any:
-			for key, child := range value {
-				if key == "filename" {
-					name, ok := child.(string)
-					if !ok {
-						return fmt.Errorf("model filename references must be strings")
-					}
-					if name == "" {
-						continue
-					}
-					if err := validateORTGenAIPath(name); err != nil {
-						return err
-					}
-					result.filenames = append(result.filenames, name)
-				} else if err := visit(child); err != nil {
-					return err
-				}
-			}
-		case []any:
-			for _, child := range value {
-				if err := visit(child); err != nil {
-					return err
-				}
-			}
+	for _, name := range result.filenames {
+		if err := validateORTGenAIPath(name); err != nil {
+			return result, err
 		}
-		return nil
 	}
-	if err := visit(document["model"]); err != nil {
-		return result, err
-	}
-	slices.Sort(result.filenames)
 	slices.Sort(result.providers)
 	return result, nil
 }

@@ -19,6 +19,9 @@ func resolveORTOptions(m *Model, opts api.Options) (*ortrunner.ClientOptions, er
 	mode := strings.ToLower(strings.TrimSpace(envconfig.AccelMode()))
 	npu := os.Getenv("OLLAMA_ONNX_NPU") == "1"
 	modelDir := os.Getenv("OLLAMA_ONNX_MODEL")
+	if modelDir != "" && m.ORTCompatibility != nil && filepath.Clean(modelDir) != filepath.Clean(m.ModelPath) {
+		return nil, fmt.Errorf("OLLAMA_ONNX_MODEL cannot replace a model with a declared compatibility profile; select the other model explicitly")
+	}
 	if modelDir == "" && m.IsORTGenAI() {
 		modelDir = m.ModelPath
 	}
@@ -108,6 +111,9 @@ func resolveORTOptions(m *Model, opts api.Options) (*ortrunner.ClientOptions, er
 	}
 	if envconfig.NPUDeviceID() != "" && provider == "qnn" {
 		return nil, fmt.Errorf("OLLAMA_NPU_DEVICE_ID is a DXCore adapter index and cannot select a QNN device")
+	}
+	if _, err := ortrunner.CheckCompatibility(modelDir, provider); err != nil {
+		return nil, fmt.Errorf("ORT model compatibility: %w", err)
 	}
 	return &ortrunner.ClientOptions{
 		ModelDir: modelDir, Provider: provider, DeviceType: deviceType, DeviceID: deviceID,

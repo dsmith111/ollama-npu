@@ -28,6 +28,10 @@ validation.
 
 ## Runtime setup
 
+Review the runtime's Microsoft and Qualcomm terms before acquisition; see
+[distribution evidence](#distribution-evidence-and-publication-gates). Microsoft
+MIT notices do not replace the separately included Qualcomm AI Stack license.
+
 Use the fork executable consistently for setup, serving and model commands.
 Check that a stock Ollama service is not already occupying the chosen port.
 Do not overwrite or terminate an existing installation silently.
@@ -92,6 +96,103 @@ compiled context graphs. The actual config references determine the required
 assets; a nonzero `.bin` beside an invalid ONNX wrapper is not a usable model.
 Compiled target assets must be validated on compatible hardware.
 
+### Versioned compatibility declaration
+
+New publishers can include an optional named artifact, **`ollama_npu.json`**,
+alongside `genai_config.json`. Schema 1 currently supports only Windows ARM64 QNN,
+text completion and decoder graphs/pipelines. This is a publisher's **declaration**,
+not a certification, conversion result, license grant or NPU-placement measurement.
+Do not add it to an old bundle by guessing its provenance, precision or targets.
+
+Illustrative schema, **not an approved downloadable/qualified model**:
+
+```json
+{
+  "schema_version": 1,
+  "platform": "windows/arm64",
+  "provider": "qnn",
+  "genai_version": "0.12.2",
+  "ort_version": "1.24.1",
+  "processor_names": [
+    "Snapdragon(R) X Elite - X1E78100 - Qualcomm(R) Oryon(TM) CPU"
+  ],
+  "context_length": 4096,
+  "precision": "publisher-declared-mixed",
+  "capabilities": ["completion"],
+  "stages": [
+    {"filename": "embeddings.onnx", "provider": "cpu"},
+    {"filename": "context_ctx.onnx", "provider": "qnn"},
+    {"filename": "iterator_ctx.onnx", "provider": "qnn"},
+    {"filename": "lm_head.onnx", "provider": "cpu"}
+  ]
+}
+```
+
+Use the artifact's actual precision and exact qualified processor descriptors,
+not this example as permission to claim support. The CPU descriptor is read from
+Windows' `ProcessorNameString`; matching is case-insensitive, otherwise exact.
+This conservative allowlist is not QNN device binding, driver qualification or
+proof that every operation runs on the NPU.
+
+Contract:
+
+- UTF-8 JSON object, at most 64 KiB; unknown/duplicate fields, nulls, trailing
+  data, unsupported schema/platform/provider and malformed declarations fail.
+- All example fields are required. Exact runtime versions are `major.minor.patch`;
+  no version ranges. Other runtime tuples may be stored/imported but cannot run
+  on this fork's approved tuple without separate migration/qualification.
+- `context_length` is a positive int32 and matches the model config.
+  `precision` is publisher-declared text of 1..64 bytes, not inferred.
+  `capabilities` must be exactly `["completion"]`: chat also needs the correct
+  Ollama template; this does not promise tools, vision or structured output.
+- `processor_names` has 1..32 unique names of at most 256 bytes.
+  `stages` has 1..64 unique, canonical relative `.onnx` filenames, with `cpu` or
+  `qnn` providers and at least one QNN stage. Every referenced graph must be a
+  described decoder stage. Non-decoder graph configurations are outside schema 1.
+  Providers follow the config's actual session-option inheritance; CPU
+  embedding/head stages must be described as CPU.
+  Pipelines require `model.type="decoder-pipeline"` and no `decoder.filename`;
+  decoder-only model types require just `decoder.filename`, with no pipeline.
+  Inactive graphs cannot be counted as declared NPU execution stages.
+  Declared ORT bundles cannot be mixed with native tensor layers to bypass checks
+  through the native transfer path.
+- QNN stages must use HTP: optional `backend_type` must be `htp`, and optional
+  `backend_path` must be exactly `QnnHtp.dll`, not an arbitrary library path.
+- Optional `source` is `{"repository":"https://host/owner/repo",
+  "revision":"full-lowercase-Git-commit"}`. The revision is 40 or 64 hex digits.
+  Credentials, URL query/fragment and mutable revision names are rejected.
+  This records a claim, not independently verified source-to-artifact provenance.
+- The enclosing Ollama manifest already binds hashes for profile/config, graphs,
+  weights, tokenizer and separate template/parameter/license layers. Do not
+  duplicate that inventory or embed native runtime libraries in the model.
+
+Import, `FROM`, copy, Show and download validate structure without requiring the
+current machine to match the target. A producer can package/archive another
+target's model. A declared profile is checked against config, selected provider,
+host and fork runtime pins **before native loading**, in both server and child.
+`OLLAMA_ONNX_MODEL` cannot replace a stored declared model with another directory.
+QNN backend/HTP/SoC environment overrides are rejected for declared profiles.
+
+Declared models also require a complete, hash-verified runtime installation.
+The first runtime search candidate containing GenAI must validate; a corrupt or
+legacy candidate fails instead of falling back to PATH or a different DLL.
+Use `npu setup` in a fresh directory and select it with `OLLAMA_ORT_PATH`.
+Native initialization validates this once per child, not on each HTTP request.
+
+Show's `model_info` reports `npu.compatibility_status` as `declared`, with the
+profile in `npu.compatibility`, or `legacy-unverified` when absent. Legacy models
+retain their previous loader behavior and emit an explicit compatibility warning.
+An absent profile is allowed; a malformed or case-aliased declaration is not.
+The October 13 local hardware assets remain unchanged, without newly invented
+metadata. This new declaration/verified-load route still needs packaged hardware
+qualification after administrator-approved execution becomes available.
+
+Affected Go suites/scoped vet, qualification helpers and CLI compilation pass.
+The full Go suite was rerun: 74 packages pass, three fail, 31 skip/have no tests.
+Failures remain the previously reproduced upstream Windows symlink/Codex-mode
+issues (`manifest`, `compatmigrate`, `cmd/launch`), not a full-suite-green claim.
+Hardware qualification was not opted in; no new executable/NPU run occurred.
+
 ### Text generation controls
 
 The runner forwards temperature, top-p/top-k, seed, stop strings, repetition
@@ -114,11 +215,16 @@ cold reload.
 ## Publishing and pulling
 
 The fork stores ORT assets as named layers in Ollama's content-addressed model
-store. Users of a compatible fork should be able to pull a qualified published
-model and use it through their usual Ollama application.
+store. Seamless hosted pull/run is the intended outcome, **not yet a verified
+hosted service guarantee**. Synthetic loopback push/empty-store pull tests preserve
+names/digests, compatibility declaration, template, parameters and license.
+They reject corrupted and well-hashed contradictory declarations before writing
+the local model tag; create/FROM/copy/Show tests also preserve the profile.
+Manifest-list push preflights every child's declaration before registry access.
 
 Publishing is an explicit operation requiring an authorized registry namespace
-and redistribution rights:
+and redistribution rights. The following is only for an approved artifact and
+destination, after the service-policy/visibility decisions below:
 
 ```powershell
 .\ollama.exe cp my-model:qnn myuser/my-model:qnn
@@ -132,6 +238,43 @@ generation on another compatible profile before promoting a model.
 Stock Ollama does not gain the ORT runner by pulling an ORT model tag. Public
 registry acceptance and target compatibility are separate from local packaging.
 
+### Distribution evidence and publication gates
+
+Primary-source research checked October 14, 2026:
+
+| Item | Evidence | Consequence |
+| --- | --- | --- |
+| Microsoft runtime code | [GenAI 0.12.2 MIT](https://raw.githubusercontent.com/microsoft/onnxruntime-genai/v0.12.2/LICENSE) and [ORT 1.24.1 MIT](https://raw.githubusercontent.com/microsoft/onnxruntime/v1.24.1/LICENSE) | Preserve notices; package version/dependency minima do not certify compiled contexts |
+| Qualcomm runtime components | ORT's [QNN build copies the SDK license](https://raw.githubusercontent.com/microsoft/onnxruntime/v1.24.1/cmake/onnxruntime_providers_qnn.cmake); exact installed `licenses\microsoft.ml.onnxruntime.qnn\Qualcomm_LICENSE.pdf` SHA256 `ec1dccfdcba5c6e64126e84199b8362bf4999107bfa567ebe831dbb4c461692b` | AI Stack license section 1 allows object-code distribution incorporated in an application, not standalone redistribution; sections 2, 3 and 10 add notice/use/rights/export obligations. This is not blanket permission for runtime/model mirrors |
+| Original Phi-3 weights | [Microsoft source MIT license at fixed revision](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/raw/f39ac1d28e925b323eae81227eaba4464caced4e/LICENSE) | Does not establish the provenance/terms of this existing compiled derivative |
+| Existing local derivative | Preserved manifest has no license layer or immutable source revision; `_publish_manifest.json` is an asset hash inventory, not provenance evidence | Do not upload it based only on successful inference or the original weights' license |
+| Other catalog artifacts | [Microsoft ONNX catalog](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-onnx) lists other execution targets; [Qualcomm Phi-3.5](https://huggingface.co/qualcomm/Phi-3.5-mini-instruct) offers GENIE/QAIRT artifacts | Different model/runtime/artifact route, not an established drop-in ORT bundle or license for the local derivative |
+| Hosted model protocol | [Documented imports](https://docs.ollama.com/import) and [push API](https://docs.ollama.com/api/push) do not promise ORT named-layer support or a private/unlisted push selector | Client fixture success cannot establish hosted acceptance, descriptor preservation or privacy; a staging tag must not be assumed private |
+| Hosted service rights | [Ollama terms](https://ollama.com/terms), sections 4 and 7 | Competing-product/automated-access and branding provisions need clarification for fork registry use. The source MIT license is not a hosted-service authorization |
+
+This is engineering evidence, not a legal opinion. Obtain artifact-specific
+rights/provenance review for source weights, generated contexts and any included
+vendor software; preserve the applicable notices and review runtime terms before
+acquisition. No definitive compiled-output grant was established for the local
+bundle. The portable fork archive contains no ORT/QNN DLLs or model weights.
+
+Before any hosted test:
+
+1. Clarify permitted fork/registry use and custom ORT layer handling with the
+   service owner; `hello@ollama.com` is the published terms contact. No contact or
+   approval is implied by this research.
+2. Select a model with recorded, immutable source and producer/SDK provenance,
+   reviewed redistribution rights and separately qualified template/profile.
+3. Explicitly approve the account/namespace, visibility and exact upload contents.
+   Require genuine service controls for private testing, not a private-looking tag.
+4. On approved compatible hardware, push and pull into a separate empty store,
+   check all identities and run generation through an existing Ollama client.
+   Retain host/runtime/driver and independent placement evidence.
+
+Until then, F2 hosted distribution stays open. A reviewed HF/offline artifact can
+support a narrower preview, but neither bypasses artifact rights nor fulfills the
+hosted `ollama pull` goal. No model/vendor material was uploaded in this work.
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -140,6 +283,10 @@ registry acceptance and target compatibility are separate from local packaging.
 | Missing/corrupt runtime | Run setup/doctor; verify the selected package and dependency set |
 | Provider or backend fails to load | Check runtime versions, QNN/HTP dependencies and OEM driver |
 | Model load fails | Check graph/config references, context binaries, tokenizer and compiled target |
+| `NPU_MODEL_INCOMPATIBLE` / `NPU_TARGET_INCOMPATIBLE` | Acquire an artifact declared for this platform/provider/processor; do not guess or edit target metadata |
+| `NPU_RUNTIME_INCOMPATIBLE` | Use a separately qualified model/fork tuple; do not mix DLL versions |
+| Declared model rejects a legacy runtime or QNN override | Select a fresh setup-verified directory and remove backend/SoC/HTP overrides |
+| `NPU_PROFILE_LOAD_FAILED` | A declaration is not hardware proof; preserve config/runtime and check the publisher's target and OEM driver |
 | Requested setting is rejected | Use the supported option set; do not assume all llama.cpp options apply |
 | Prompt exceeds context | Use the bundle's qualified context, not a larger guessed `num_ctx` |
 | Chat exposes role tokens or produces poor output | Verify tokenizer, template and source/quantization quality |

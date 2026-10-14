@@ -5,6 +5,7 @@ package oga
 import "C"
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 var initError error
 var initLoadError string
 var initOnce sync.Once
+var verifiedInitialization bool
 
 // CheckInit returns any error that occurred during ORT GenAI dynamic library initialization.
 func CheckInit() error {
@@ -28,6 +30,33 @@ func CheckInit() error {
 		slog.Error(initLoadError)
 	}
 	return initError
+}
+
+// Profiled models must not load an arbitrary runtime from PATH or a legacy directory.
+func CheckInitVerified() error {
+	initOnce.Do(func() {
+		if runtime.GOOS != "windows" || runtime.GOARCH != "arm64" {
+			initError = fmt.Errorf("verified QNN initialization requires Windows ARM64")
+			return
+		}
+		dir, err := ortruntime.VerifiedDir(context.Background(), ortruntime.SearchDirs())
+		if err != nil {
+			initError = err
+			return
+		}
+		if !tryLoadLibrary(filepath.Join(dir, "onnxruntime-genai.dll")) {
+			initError = fmt.Errorf("cannot load the verified QNN runtime from %s; check OEM driver and VC++ dependencies: %s", dir, initLoadError)
+			return
+		}
+		verifiedInitialization = true
+	})
+	if initError != nil {
+		return initError
+	}
+	if !verifiedInitialization {
+		return fmt.Errorf("ORT GenAI was initialized without verified runtime identity; reload the model in a fresh runner")
+	}
+	return nil
 }
 
 // tryLoadFromDir searches a directory for the onnxruntime-genai shared library and tries to load it.
@@ -42,27 +71,28 @@ func tryLoadFromDir(dir string) bool {
 	}
 
 	for _, match := range matches {
-		path := filepath.Join(dir, match)
-
-		cPath := C.CString(path)
-		defer C.free(unsafe.Pointer(cPath))
-
-		var handle C.oga_dynamic_handle
-		if C.oga_dynamic_load(&handle, cPath) != 0 {
-			initLoadError = fmt.Sprintf("failed to load ORT GenAI dynamic library: path=%s", path)
-			continue
+		if tryLoadLibrary(filepath.Join(dir, match)) {
+			return true
 		}
-
-		if C.oga_dynamic_load_symbols(handle) != 0 {
-			initLoadError = fmt.Sprintf("failed to load ORT GenAI dynamic library symbols: path=%s", path)
-			C.oga_dynamic_unload(&handle)
-			continue
-		}
-
-		slog.Info("loaded ORT GenAI dynamic library", "path", path)
-		return true
 	}
 	return false
+}
+
+func tryLoadLibrary(path string) bool {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+	var handle C.oga_dynamic_handle
+	if C.oga_dynamic_load(&handle, cPath) != 0 {
+		initLoadError = fmt.Sprintf("failed to load ORT GenAI dynamic library: path=%s", path)
+		return false
+	}
+	if C.oga_dynamic_load_symbols(handle) != 0 {
+		initLoadError = fmt.Sprintf("failed to load ORT GenAI dynamic library symbols: path=%s", path)
+		C.oga_dynamic_unload(&handle)
+		return false
+	}
+	slog.Info("loaded ORT GenAI dynamic library", "path", path)
+	return true
 }
 
 // tryLoadByName attempts to load the library using just its name,

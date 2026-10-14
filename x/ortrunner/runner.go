@@ -41,12 +41,34 @@ func (r *Runner) Load(modelDir string) error {
 	if err != nil {
 		return err
 	}
+	profile, err := ReadCompatibilityProfile(modelDir)
+	if err != nil {
+		return err
+	}
+	if profile != nil {
+		if err := profile.validateMetadata(meta); err != nil {
+			return err
+		}
+		if err := checkProfileEnvironment(os.Getenv); err != nil {
+			return err
+		}
+	}
 	plan, err := planProvider(meta, modelDir, os.Getenv)
 	if err != nil {
 		return err
 	}
-	if err := oga.CheckInit(); err != nil {
-		return err
+	if profile != nil {
+		if err := profile.CheckHost(plan.name); err != nil {
+			return err
+		}
+		if err := oga.CheckInitVerified(); err != nil {
+			return err
+		}
+	} else {
+		slog.Warn("ORT model has no compatibility profile; target/runtime compatibility is unverified", "profile", CompatibilityFilename)
+		if err := oga.CheckInit(); err != nil {
+			return err
+		}
 	}
 	cfg, model, tok, err := loadConfiguredModel(
 		func() (*oga.Config, error) { return oga.NewConfig(modelDir) },
@@ -78,6 +100,9 @@ func (r *Runner) Load(modelDir string) error {
 		oga.NewTokenizer,
 	)
 	if err != nil {
+		if profile != nil {
+			return fmt.Errorf("NPU_PROFILE_LOAD_FAILED: declared compatibility is not execution proof; check the publisher's compiled target and OEM driver, preserve the intact model config and verified runtime: %w", err)
+		}
 		return classifyLoadError(err, plan.name)
 	}
 	r.model, r.tokenizer, r.config = model, tok, cfg

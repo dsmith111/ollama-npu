@@ -92,6 +92,35 @@ func SearchDirs() []string {
 	return out
 }
 
+// VerifiedDir selects the first declared runtime containing GenAI, refusing an
+// invalid candidate instead of silently falling back to another installation.
+func VerifiedDir(ctx context.Context, dirs []string) (string, error) {
+	return verifiedDir(ctx, dirs, func(ctx context.Context, dir string) error {
+		_, err := ValidateInstallDirContext(ctx, dir)
+		return err
+	})
+}
+
+func verifiedDir(ctx context.Context, dirs []string, validate func(context.Context, string) error) (string, error) {
+	for _, dir := range dirs {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		_, err := os.Lstat(filepath.Join(dir, "onnxruntime-genai.dll"))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspect selected QNN runtime: %w", err)
+		}
+		if err := validate(ctx, dir); err != nil {
+			return "", fmt.Errorf("QNN runtime %s is not the approved intact installation; run ollama npu setup in a fresh directory and select it with OLLAMA_ORT_PATH: %w", dir, err)
+		}
+		return dir, nil
+	}
+	return "", fmt.Errorf("no verified QNN runtime found; run ollama npu setup --provider qnn and select it with OLLAMA_ORT_PATH")
+}
+
 func IsInstalled() bool {
 	dir := InstallDir()
 	if dir == "" {

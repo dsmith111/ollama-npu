@@ -2063,9 +2063,14 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 
 	if m.IsORTGenAI() {
 		resp.ModelInfo = map[string]any{
-			"general.type":      m.Config.ModelFormat,
-			"general.file_type": m.Config.FileType,
-			"general.family":    m.Config.ModelFamily,
+			"general.type":             m.Config.ModelFormat,
+			"general.file_type":        m.Config.FileType,
+			"general.family":           m.Config.ModelFamily,
+			"npu.compatibility_status": "legacy-unverified",
+		}
+		if m.ORTCompatibility != nil {
+			resp.ModelInfo["npu.compatibility_status"] = "declared"
+			resp.ModelInfo["npu.compatibility"] = m.ORTCompatibility
 		}
 		return resp, nil
 	}

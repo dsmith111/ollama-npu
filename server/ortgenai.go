@@ -15,6 +15,7 @@ import (
 	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/manifest"
+	"github.com/ollama/ollama/x/ortrunner"
 )
 
 const MediaTypeORTGenAI = "application/vnd.ollama.image.ortgenai"
@@ -59,6 +60,9 @@ func convertFromORTGenAI(ctx context.Context, files map[string]string, fn func(a
 	if err := validateORTGenAIArtifacts(artifacts); err != nil {
 		return nil, err
 	}
+	if files[ortrunner.CompatibilityFilename] == "" {
+		fn(api.ProgressResponse{Status: "warning: no ollama_npu.json; target/runtime compatibility is unverified"})
+	}
 	fn(api.ProgressResponse{Status: "packaging ORT GenAI model"})
 	return layers, nil
 }
@@ -97,10 +101,13 @@ func ortGenAIArtifacts(layers []manifest.Layer) (map[string]manifest.Layer, erro
 			return nil, err
 		}
 		key := strings.ToLower(layer.Name)
+		if key == strings.ToLower(ortrunner.CompatibilityFilename) && layer.Name != ortrunner.CompatibilityFilename {
+			return nil, fmt.Errorf("%w: compatibility profile must be named %s exactly", errInvalidORTGenAI, ortrunner.CompatibilityFilename)
+		}
 		if folded[key] {
 			return nil, fmt.Errorf("%w: duplicate artifact name %q", errInvalidORTGenAI, layer.Name)
 		}
-		required := strings.HasSuffix(layer.Name, ".onnx") || slices.Contains([]string{"genai_config.json", "tokenizer.json", "tokenizer.model"}, layer.Name)
+		required := strings.HasSuffix(layer.Name, ".onnx") || slices.Contains([]string{"genai_config.json", "tokenizer.json", "tokenizer.model", ortrunner.CompatibilityFilename}, layer.Name)
 		if layer.Size < 0 || required && layer.Size == 0 || len(layer.Digest) != len("sha256:")+sha256.Size*2 {
 			return nil, fmt.Errorf("%w: invalid size/digest for %q", errInvalidORTGenAI, layer.Name)
 		}
@@ -209,6 +216,19 @@ func validateORTGenAIArtifacts(layers []manifest.Layer) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", errInvalidORTGenAI, err)
 	}
+	if layer, ok := files[ortrunner.CompatibilityFilename]; ok {
+		profilePath, err := manifest.BlobsPath(layer.Digest)
+		if err != nil {
+			return err
+		}
+		profile, err := ortrunner.ReadCompatibilityProfileFile(profilePath)
+		if err != nil {
+			return fmt.Errorf("%w: %w", errInvalidORTGenAI, err)
+		}
+		if err := profile.ValidateModelConfig(configPath); err != nil {
+			return fmt.Errorf("%w: %w", errInvalidORTGenAI, err)
+		}
+	}
 	for _, name := range config.filenames {
 		if err := validateORTGenAIPath(name); err != nil {
 			return err
@@ -244,6 +264,32 @@ func validateORTGenAIArtifacts(layers []manifest.Layer) error {
 	}
 	// ONNX graph semantics and external-data/EPContext references are checked by
 	// the child loader. Packaging validates config references, not inference.
+	return nil
+}
+
+func hasDeclaredORTProfile(layers []manifest.Layer) bool {
+	for _, layer := range layers {
+		if layer.MediaType == MediaTypeORTGenAI && strings.EqualFold(layer.Name, ortrunner.CompatibilityFilename) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateORTProfileLayout(layers []manifest.Layer) error {
+	if hasTensorLayers(layers) && hasDeclaredORTProfile(layers) {
+		return fmt.Errorf("%w: declared ORT bundles cannot contain native tensor layers", errInvalidORTGenAI)
+	}
+	return nil
+}
+
+func validateDeclaredORTProfile(layers []manifest.Layer) error {
+	if err := validateORTProfileLayout(layers); err != nil {
+		return err
+	}
+	if hasDeclaredORTProfile(layers) {
+		return validateORTGenAIArtifacts(layers)
+	}
 	return nil
 }
 

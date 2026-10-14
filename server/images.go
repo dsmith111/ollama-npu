@@ -33,6 +33,7 @@ import (
 	"github.com/ollama/ollama/transfer"
 	"github.com/ollama/ollama/types/model"
 	"github.com/ollama/ollama/version"
+	"github.com/ollama/ollama/x/ortrunner"
 
 	"golang.org/x/mod/semver"
 )
@@ -85,6 +86,7 @@ type Model struct {
 	Options            map[string]any
 	GenerationDefaults model.GenerationDefaults
 	Messages           []api.Message
+	ORTCompatibility   *ortrunner.CompatibilityProfile
 
 	Template       *template.Template
 	templateDigest string
@@ -902,6 +904,10 @@ func modelFromManifest(n model.Name, mf *manifest.Manifest) (*Model, error) {
 			return nil, fmt.Errorf("materialize ORT GenAI model: %w", err)
 		}
 		m.ModelPath = modelDir
+		m.ORTCompatibility, err = ortrunner.ReadCompatibilityProfile(modelDir)
+		if err != nil {
+			return nil, fmt.Errorf("read ORT compatibility: %w", err)
+		}
 	}
 	return m, nil
 }
@@ -1077,6 +1083,9 @@ func PushModel(ctx context.Context, name string, regOpts *registryOptions, fn fu
 		}
 
 		layers = append(layers, mf.Layers...)
+		if err := validateDeclaredORTProfile(mf.Layers); err != nil {
+			return fmt.Errorf("validate declared ORT profile before push: %w", err)
+		}
 		if mf.Config.Digest != "" {
 			layers = append(layers, mf.Config)
 		}
@@ -1166,6 +1175,9 @@ func pushLayersForManifestList(parent manifest.Manifest) ([]manifest.Layer, erro
 			return nil, err
 		}
 
+		if err := validateDeclaredORTProfile(resolved.Layers); err != nil {
+			return nil, fmt.Errorf("validate declared ORT profile for manifest child %q before push: %w", child.Runner, err)
+		}
 		if err := addLayer(manifest.Layer{
 			MediaType: manifest.MediaTypeManifest,
 			Digest:    childDigest,
@@ -1254,6 +1266,9 @@ func PullModel(ctx context.Context, name string, runner string, regOpts *registr
 		layers = append(layers, mf.Config)
 	}
 
+	if err := validateORTProfileLayout(layers); err != nil {
+		return err
+	}
 	// Use fast transfer for models with tensor layers (many small blobs)
 	if hasTensorLayers(layers) {
 		if err := pullWithTransfer(ctx, n, layers, manifestData, regOpts, fn); err != nil {
@@ -1313,6 +1328,10 @@ func PullModel(ctx context.Context, name string, runner string, regOpts *registr
 	}
 	delete(deleteMap, mf.Config.Digest)
 
+	// Validate declarations independently of this host, before publishing the tag.
+	if err := validateDeclaredORTProfile(mf.Layers); err != nil {
+		return fmt.Errorf("validate downloaded ORT compatibility: %w", err)
+	}
 	fn(api.ProgressResponse{Status: "writing manifest"})
 
 	if err := manifest.WriteManifestData(n, manifestData); err != nil {
