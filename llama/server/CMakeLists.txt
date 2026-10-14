@@ -178,11 +178,16 @@ set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
 set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
 set(LLAMA_SUBPROCESS OFF CACHE BOOL "" FORCE)
 
+if(CMAKE_HOST_WIN32)
+    set(_ollama_git_path_config GIT_CONFIG core.longpaths=true)
+endif()
+
 FetchContent_Declare(
     llama_cpp
     GIT_REPOSITORY "https://github.com/ggml-org/llama.cpp.git"
     GIT_TAG ${LLAMA_CPP_GIT_TAG}
     GIT_SHALLOW TRUE
+    ${_ollama_git_path_config}
     ${_ollama_compat_patch_cmd}
 )
 FetchContent_MakeAvailable(llama_cpp)
