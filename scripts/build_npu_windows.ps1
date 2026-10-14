@@ -137,7 +137,8 @@ try {
     foreach ($dll in @("libc++.dll", "libunwind.dll", "libwinpthread-1.dll")) {
         Copy-Item -LiteralPath (Join-Path $targetRuntime $dll) -Destination $stage
     }
-    New-Item -ItemType Directory -Path (Join-Path $stage "licenses"), (Join-Path $stage "docs") | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $stage "licenses"), (Join-Path $stage "docs"),
+        (Join-Path $stage "integration") | Out-Null
     Copy-Item -LiteralPath (Join-Path $llvm "LICENSE.TXT") -Destination (Join-Path $stage "licenses\LLVM-MinGW.txt")
     $runtimeNotices = Join-Path $llvm "aarch64-w64-mingw32\share\mingw32"
     if (-not (Test-Path -LiteralPath $runtimeNotices -PathType Container)) {
@@ -154,6 +155,7 @@ try {
     foreach ($doc in @("npu_qnn.md", "development.md")) {
         Copy-Item -LiteralPath (Join-Path $source "docs\$doc") -Destination (Join-Path $stage "docs")
     }
+    Copy-Item -LiteralPath (Join-Path $source "integration\README.md") -Destination (Join-Path $stage "integration")
 
     $systemDLLs = @("advapi32.dll", "bcrypt.dll", "cfgmgr32.dll", "combase.dll",
         "comctl32.dll", "comdlg32.dll", "crypt32.dll", "d3d12.dll", "dbghelp.dll",
@@ -184,6 +186,14 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Cannot record Go identity" }
     $cmakeVersion = @(& $cmake --version)
     if ($LASTEXITCODE -ne 0) { throw "Cannot record CMake identity" }
+    $finalRevision = @(& git rev-parse HEAD)
+    if ($LASTEXITCODE -ne 0 -or $finalRevision[0].Trim() -ne $revision) {
+        throw "Source revision changed during packaging"
+    }
+    $finalStatus = @(& git status --porcelain --untracked-files=normal)
+    if ($LASTEXITCODE -ne 0 -or (-not $dirty -and $finalStatus.Count -gt 0)) {
+        throw "Source worktree changed during packaging"
+    }
     $metadata = [ordered]@{
         schema_version = 1
         product = "ollama-npu"

@@ -156,6 +156,8 @@ authentication. The package is **unsigned**, excludes the desktop app, models,
 ORT/QNN runtime and drivers, and does not declare itself hardware-qualified.
 Reproducible here means an attributable clean-source build, not byte-identical
 compiler or ZIP output.
+Qualification instructions are bundled in `integration\README.md`; running the
+Go suite still requires the source checkout at the recorded `source_commit`.
 
 For focused Go tests with the same standard compiler:
 
