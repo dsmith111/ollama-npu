@@ -151,26 +151,21 @@ execution evidence.
 
 ## Development and qualification
 
-See [development](development.md) for the current upstream native build. The
-fork's ORT bindings additionally require a working CGo compiler. On a developer
-machine that already has the local ARM64 compiler wrappers:
-
-```powershell
-$env:CGO_ENABLED = '1'
-$env:CC = (Resolve-Path '.\_tools\cgo-clang.exe').Path
-$env:CXX = (Resolve-Path '.\_tools\cgo-clang++.exe').Path
-$env:CGO_LDFLAGS = '-ladvapi32'
-go build .
-go test .\parser .\server .\cmd .\x\ortrunner\...
-```
-
-Those local binaries are not a portable installer or a substitute for a
-documented clean build environment.
+See [development](development.md#windows-arm) for the standard LLVM-MinGW ARM64
+build, focused tests and `scripts\build_npu_windows.ps1` portable packaging.
+Extract the complete archive; retain the CLI's peer DLLs and `lib\ollama` layout.
+Do not replace a stock installation with this unsigned preview. Runtime setup is
+still a separate hash-verified acquisition; no model or ORT/QNN runtime is bundled.
+Private compiler wrappers from earlier development are not build prerequisites.
 
 Hardware qualification must include correct output, context/options, streaming,
 client disconnect/cancellation, unload/reload, provider failure and ordinary
 CPU/GPU regression checks. Retain exact source, binary, model, runtime and driver
 identities. Hosted unit tests do not exercise an NPU.
+The versioned [opt-in qualification suite](../integration/README.md#opt-in-f0-npu-qualification-existing-local-server-only)
+uses an existing dedicated loopback server and existing models. It never downloads,
+publishes or repairs models. Retain its JSON results alongside independent native
+provider logs; HTTP success alone cannot prove QNN placement.
 
 ### October 13 hardware check
 

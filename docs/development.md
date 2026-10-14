@@ -114,6 +114,72 @@ Go-only build still needs the matching native payload in an ordinary installed
 layout. A nonstandard CMake output directory is not automatically a runtime
 search path.
 
+### Portable NPU fork package
+
+From a clean Git checkout, use the fork's CLI/server-only packaging entrypoint.
+Prerequisites: native Windows ARM64, Go 1.26.0 or newer, Git, CMake 3.24 or newer,
+Ninja, Windows SDK `10.0.26100.0` headers and the official
+[LLVM-MinGW UCRT ARM64 toolchain](https://github.com/mstorsjo/llvm-mingw/releases/tag/20261006).
+The tested `llvm-mingw-20261006-ucrt-aarch64.zip` asset has SHA256
+`9a835d5179c9f3a5a783c11a7f14062a249b4765dd11add64a66786864e82ab2`.
+Verify the downloaded archive before extracting or executing its tools. No local
+CGo wrapper, Python, converter, Visual Studio environment setup or prebuilt native
+payload is required. Network access is needed for pinned source/modules/license
+tool dependencies on the first build.
+
+```powershell
+.\scripts\build_npu_windows.ps1 `
+    -LLVMMinGWRoot C:\tools\llvm-mingw-20261006-ucrt-aarch64 `
+    -WindowsSDKInclude 'C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0' `
+    -CMake C:\tools\cmake\bin\cmake.exe `
+    -Ninja C:\tools\ninja\ninja.exe `
+    -BuildDirectory C:\build\ollama-npu-arm64 `
+    -OutputDirectory C:\packages\ollama-npu
+```
+
+The build directory must be new or empty; cached development builds are refused.
+The script scopes/restores compiler variables, disables external Go workspaces
+and the local llama.cpp source override. It builds the existing `cpu_arm64`
+preset (`GGML_NATIVE=OFF`, `GGML_CPU_ALL_VARIANTS=OFF`) and matching CLI, bundles
+runtime peers/notices and audits ARM64/ARM64X binaries and imports without resolving
+dependencies through developer `PATH`. Default identity:
+`0.0.0-npu.dev.<source-commit>`. `-Version 0.0.0-npu.preview.1` supplies an explicit
+fork identity. Dirty checkouts fail unless `-AllowDirty` is supplied; development
+outputs then receive `.dirty`. Existing package outputs are never overwritten.
+
+The versioned ZIP contains `ollama.exe`, its peer DLLs, `lib\ollama` native
+payload/notices, setup/development documentation, `build-info.json` and
+`files.json` (sizes/SHA256 for every other file). An adjacent `.zip.sha256` records
+the archive hash. Compare it with `Get-FileHash -Algorithm SHA256` before extraction.
+These checksums establish integrity relative to trusted metadata, not publisher
+authentication. The package is **unsigned**, excludes the desktop app, models,
+ORT/QNN runtime and drivers, and does not declare itself hardware-qualified.
+Reproducible here means an attributable clean-source build, not byte-identical
+compiler or ZIP output.
+
+For focused Go tests with the same standard compiler:
+
+```powershell
+$env:PATH = 'C:\tools\llvm-mingw-20261006-ucrt-aarch64\bin;' + $env:PATH
+$env:CGO_ENABLED = '1'
+$env:CC = 'aarch64-w64-mingw32-gcc.exe'
+$env:CXX = 'aarch64-w64-mingw32-g++.exe'
+$env:CGO_CXXFLAGS = '-idirafter "C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um" -idirafter "C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared"'
+Remove-Item Env:\CGO_LDFLAGS -ErrorAction SilentlyContinue
+go test .\server .\parser .\cmd .\discover\dxcore .\x\ortrunner\...
+go vet .\server .\parser .\cmd .\discover\dxcore .\x\ortrunner\...
+```
+
+SDK headers supply DXCore/DirectML interfaces absent from MinGW; `-idirafter`
+retains the toolchain's compatible Windows headers. Hardware qualification uses
+the explicit opt-in suite documented in [integration tests](../integration/README.md).
+A local package build does not close fresh-user/clean-machine, signing, hosted
+model distribution or multi-device release gates.
+If Windows security policy blocks an unsigned executable, retain the security
+event and use an administrator-approved/signing workflow or an approved test
+machine. Do not disable protection, add exclusions or relocate/rename the binary
+to evade the policy.
+
 ## Linux
 
 Additional prerequisites:

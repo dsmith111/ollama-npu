@@ -18,12 +18,25 @@
 #include <dxcore.h>
 #include <dxcore_interface.h>
 #include <wrl/client.h>
+#define DML_TARGET_VERSION_USE_LATEST
 #include <DirectML.h>
 
 #include <cstdio>
 #include <cstring>
 
+#if defined(__MINGW32__)
+// These SDK-only interfaces are absent from MinGW's UUID registry.
+template<> inline const GUID &__mingw_uuidof<IDXCoreAdapterFactory>() { return IID_IDXCoreAdapterFactory; }
+template<> inline const GUID &__mingw_uuidof<IDXCoreAdapterFactory1>() { return IID_IDXCoreAdapterFactory1; }
+template<> inline const GUID &__mingw_uuidof<IDXCoreAdapterList>() { return IID_IDXCoreAdapterList; }
+template<> inline const GUID &__mingw_uuidof<IDXCoreAdapter>() { return IID_IDXCoreAdapter; }
+__CRT_UUID_DECL(IDMLDevice1, 0xa0884f9a, 0xd2be, 0x4355, 0xaa, 0x5d, 0x59, 0x01, 0x28, 0x1a, 0xd1, 0xd2)
+#endif
+
 using Microsoft::WRL::ComPtr;
+
+// MinGW's d3dcommon.h does not yet name the Windows SDK generic-ML level.
+static constexpr D3D_FEATURE_LEVEL generic_ml_level = static_cast<D3D_FEATURE_LEVEL>(0x100);
 
 // ---------------------------------------------------------------------------
 // Dynamic loaders (same pattern as ggml-directml.cpp)
@@ -190,7 +203,7 @@ extern "C" void dxcore_probe(DxcoreProbeResult *out) {
         if (!info->has_d3d12_graphics) {
             // NPU/MCDM: try Core/Generic feature levels
             struct { D3D_FEATURE_LEVEL fl; const char *name; } levels[] = {
-                { D3D_FEATURE_LEVEL_1_0_GENERIC, "1_0_GENERIC" },
+                { generic_ml_level,             "1_0_GENERIC" },
                 { D3D_FEATURE_LEVEL_1_0_CORE,    "1_0_CORE" },
             };
             for (auto &lvl : levels) {
@@ -221,7 +234,7 @@ extern "C" void dxcore_probe(DxcoreProbeResult *out) {
                 struct { D3D_FEATURE_LEVEL fl; const char *name; } levels[] = {
                     { D3D_FEATURE_LEVEL_11_0,       "11_0" },
                     { D3D_FEATURE_LEVEL_1_0_CORE,   "1_0_CORE" },
-                    { D3D_FEATURE_LEVEL_1_0_GENERIC, "1_0_GENERIC" },
+                    { generic_ml_level,             "1_0_GENERIC" },
                 };
                 for (auto &lvl : levels) {
                     hr = D3D12CreateDevice(adapter.Get(), lvl.fl, IID_PPV_ARGS(&d3d_device));
