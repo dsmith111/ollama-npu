@@ -18,7 +18,7 @@ function Invoke-Checked {
     param([string]$Tool, [string[]]$Arguments)
     # Native stderr can contain successful compiler warnings in Windows PowerShell.
     $ErrorActionPreference = "Continue"
-    $LASTEXITCODE = $null
+    $global:LASTEXITCODE = $null
     & $Tool @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "$Tool failed with exit code $LASTEXITCODE"
