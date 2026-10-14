@@ -39,7 +39,7 @@ var npuPrompts = []struct {
 }{
 	{"arithmetic", "What is 2 + 2? Reply with only the number.", "4"},
 	{"capital", "What is the capital of France? Reply with only the city name.", "Paris"},
-	{"color", "What color is a clear daytime sky? Reply with exactly one word, capitalized.", "Blue"},
+	{"color", "What color is a clear daytime sky? Reply with exactly one word in uppercase.", "BLUE"},
 }
 
 type npuQualificationConfig struct {
@@ -252,14 +252,14 @@ func npuGenerateRequest(tag, text string) api.GenerateRequest {
 	}
 }
 
-func npuValidateGeneration(r api.GenerateResponse, tag, want, reason string, limit int) error {
-	if !r.Done || r.DoneReason != reason || !npuSameModel(r.Model, tag) ||
-		r.RemoteHost != "" || r.RemoteModel != "" || r.Thinking != "" || len(r.ToolCalls) != 0 ||
-		strings.TrimSpace(r.Response) != want {
-		return fmt.Errorf("unexpected completion: model=%q done=%v reason=%q text=%q (want %q/%q), remote=%q/%q thinking=%q tools=%d",
-			r.Model, r.Done, r.DoneReason, r.Response, want, reason, r.RemoteHost, r.RemoteModel, r.Thinking, len(r.ToolCalls))
+func npuValidateGenerationResult(r api.GenerateResponse, tag string, limit int) error {
+	if !r.Done || (r.DoneReason != "stop" && r.DoneReason != "length") || !npuSameModel(r.Model, tag) ||
+		r.RemoteHost != "" || r.RemoteModel != "" || r.Thinking != "" || len(r.ToolCalls) != 0 {
+		return fmt.Errorf("invalid completion: model=%q done=%v reason=%q remote=%q/%q thinking=%q tools=%d",
+			r.Model, r.Done, r.DoneReason, r.RemoteHost, r.RemoteModel, r.Thinking, len(r.ToolCalls))
 	}
 	if r.PromptEvalCount <= 0 || r.EvalCount < 1 || r.EvalCount > limit ||
+		(r.DoneReason == "length" && r.EvalCount != limit) ||
 		r.TotalDuration <= 0 || r.LoadDuration < 0 || r.PromptEvalDuration < 0 || r.EvalDuration < 0 {
 		return fmt.Errorf("invalid generation metrics: %+v", r.Metrics)
 	}
@@ -267,7 +267,17 @@ func npuValidateGeneration(r api.GenerateResponse, tag, want, reason string, lim
 	return nil
 }
 
-func (h *npuHTTP) generate(t *testing.T, req api.GenerateRequest, want, reason string, limit int) time.Duration {
+func npuValidateGeneration(r api.GenerateResponse, tag, want, reason string, limit int) error {
+	if err := npuValidateGenerationResult(r, tag, limit); err != nil {
+		return err
+	}
+	if r.DoneReason != reason || strings.TrimSpace(r.Response) != want {
+		return fmt.Errorf("unexpected completion: reason=%q text=%q (want %q/%q)", r.DoneReason, r.Response, want, reason)
+	}
+	return nil
+}
+
+func (h *npuHTTP) generateResponse(t *testing.T, req api.GenerateRequest) (api.GenerateResponse, time.Duration) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), npuRequestTimeout)
 	defer cancel()
@@ -279,6 +289,12 @@ func (h *npuHTTP) generate(t *testing.T, req api.GenerateRequest, want, reason s
 	elapsed := time.Since(start)
 	t.Logf("model=%q raw=%v options=%v wall=%s text=%q done_reason=%q metrics=%+v",
 		req.Model, req.Raw, req.Options, elapsed, r.Response, r.DoneReason, r.Metrics)
+	return r, elapsed
+}
+
+func (h *npuHTTP) generate(t *testing.T, req api.GenerateRequest, want, reason string, limit int) time.Duration {
+	t.Helper()
+	r, elapsed := h.generateResponse(t, req)
 	if err := npuValidateGeneration(r, req.Model, want, reason, limit); err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +547,23 @@ func TestNPUQualification(t *testing.T) {
 	t.Run("repetition_window", func(t *testing.T) {
 		req := npuGenerateRequest(c.npuModel, npuPrompts[0].text)
 		req.Options["repeat_penalty"], req.Options["repeat_last_n"] = 1.1, 64
-		h.generate(t, req, "4", "stop", 32)
+		// Penalties can change the answer; test bounded, deterministic completion instead.
+		first, _ := h.generateResponse(t, req)
+		if err := npuValidateGenerationResult(first, c.npuModel, 32); err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(first.Response) == "" {
+			t.Fatal("repetition controls produced an empty completion")
+		}
+		second, _ := h.generateResponse(t, req)
+		if err := npuValidateGenerationResult(second, c.npuModel, 32); err != nil {
+			t.Fatal(err)
+		}
+		if second.Response != first.Response || second.DoneReason != first.DoneReason || second.EvalCount != first.EvalCount {
+			t.Fatal("greedy repetition-controlled completion changed across identical requests")
+		}
+		req.Options["repeat_last_n"] = 0
+		h.generate(t, req, npuPrompts[0].want, "stop", 32)
 	})
 	t.Run("explicit_zero_sampling", func(t *testing.T) {
 		req := npuGenerateRequest(c.npuModel, npuPrompts[0].text)
@@ -636,7 +668,7 @@ func TestNPUQualification(t *testing.T) {
 	}
 	t.Run("stream_terminal", func(t *testing.T) {
 		r := h.streaming(t, npuGenerateRequest(c.npuModel, npuPrompts[2].text), false)
-		if err := npuValidateGeneration(r, c.npuModel, "Blue", "stop", 32); err != nil {
+		if err := npuValidateGeneration(r, c.npuModel, npuPrompts[2].want, "stop", 32); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -765,6 +797,33 @@ func TestNPUQualificationHelpers(t *testing.T) {
 		r.Done = false
 		if err := npuValidateGeneration(r, "test:qnn", "Paris", "length", 1); err == nil {
 			t.Fatal("accepted incomplete generation")
+		}
+		r.Done, r.Response = true, " BLUE "
+		if err := npuValidateGeneration(r, "test:qnn", "BLUE", "length", 1); err != nil {
+			t.Fatalf("surrounding whitespace must be ignored: %v", err)
+		}
+		r.Response = "Blue"
+		if err := npuValidateGeneration(r, "test:qnn", "BLUE", "length", 1); err == nil {
+			t.Fatal("accepted incorrect completion letter case")
+		}
+		for _, change := range []func(*api.GenerateResponse){
+			func(r *api.GenerateResponse) { r.DoneReason = "unknown" },
+			func(r *api.GenerateResponse) { r.Model = "other:qnn" },
+			func(r *api.GenerateResponse) { r.RemoteHost = "https://remote.invalid" },
+			func(r *api.GenerateResponse) { r.Thinking = "unexpected" },
+			func(r *api.GenerateResponse) { r.PromptEvalCount = 0 },
+			func(r *api.GenerateResponse) { r.EvalCount = 0 },
+			func(r *api.GenerateResponse) { r.EvalCount = 2 },
+			func(r *api.GenerateResponse) { r.TotalDuration = 0 },
+		} {
+			bad := r
+			change(&bad)
+			if err := npuValidateGenerationResult(bad, "test:qnn", 1); err == nil {
+				t.Fatalf("accepted invalid controlled completion: %+v", bad)
+			}
+		}
+		if err := npuValidateGenerationResult(r, "test:qnn", 2); err == nil {
+			t.Fatal("accepted length termination before the token limit")
 		}
 	})
 	t.Run("digest", func(t *testing.T) {

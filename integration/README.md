@@ -95,10 +95,15 @@ to validate it; it never overrides or replaces it.
 Coverage includes:
 
 - 20 deterministic raw requests across arithmetic/capital/sky prompts, expecting
-  exactly `4`, `Paris`, `Blue` respectively (only surrounding whitespace ignored).
+  exactly `4`, `Paris`, `BLUE` respectively (only surrounding whitespace ignored).
+  The sky prompt explicitly requests uppercase, not ambiguous "capitalized".
   Options: context 512, prediction limit 32, temperature 0, seed 42.
 - One-token `length`, stop `Paris`, repetition penalty 1.1/window 64, explicit
   top-k 0/top-p 1/seed 0, automatic context, Ollama chat and OpenAI chat.
+  Active repetition penalties may change content: that check requires nonempty,
+  bounded, local completion with consistent metrics and identical greedy output
+  across two requests, not an unchanged factual answer. A zero repetition window
+  must restore the exact ordinary answer. This is not a penalty-mode quality gate.
 - Explicit rejection of JSON format, min-p 0.1, presence penalty 0.1,
   context 8192 and CPU fallback (`num_gpu=0`) for the compiled QNN model.
 - Streaming terminal validation, client disconnect after the first content

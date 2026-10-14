@@ -184,14 +184,15 @@ profile in `npu.compatibility`, or `legacy-unverified` when absent. Legacy model
 retain their previous loader behavior and emit an explicit compatibility warning.
 An absent profile is allowed; a malformed or case-aliased declaration is not.
 The October 13 local hardware assets remain unchanged, without newly invented
-metadata. This new declaration/verified-load route still needs packaged hardware
-qualification after administrator-approved execution becomes available.
+metadata. The retained older package now runs, but this new declaration/verified-load
+route still needs separately identified current-source hardware qualification.
 
 Affected Go suites/scoped vet, qualification helpers and CLI compilation pass.
 The full Go suite was rerun: 74 packages pass, three fail, 31 skip/have no tests.
 Failures remain the previously reproduced upstream Windows symlink/Codex-mode
 issues (`manifest`, `compatmigrate`, `cmd/launch`), not a full-suite-green claim.
-Hardware qualification was not opted in; no new executable/NPU run occurred.
+At this F1 source checkpoint, hardware qualification was not opted in; no new
+executable/NPU run occurred. The older package's subsequent result is recorded below.
 
 ### Text generation controls
 
@@ -367,17 +368,53 @@ It is a retained local development artifact, **not a published release**.
   unchanged UI lint baseline has 112 errors/14 warnings; `npm ci` reports 61
   dependency audit findings, not independently assessed here. Desktop/UI assets
   are excluded from this portable package.
-- **Packaged execution is unqualified.** Launching the development package's CLI
-  and native server was denied by administrator-managed Microsoft Defender ASR:
+- **Initial execution blocker:** launching the development package's CLI
+  and native server was denied by Microsoft Defender ASR:
   event `1121`, rule `C1DB55AB-C21A-4637-BB3F-A12568109D35`. No protection,
   exclusion, trust, boot or driver settings were changed. No server was started,
   and the new Go hardware suite has not run against the packaged binary.
 
-`build-info.json` therefore retains `hardware_qualified=false`. The October 13
-QNN run above remains valid evidence for its separately identified binary, not
-for this newly compiled package. An approved signing/execution workflow or an
-approved test machine must permit packaged CLI/native launch before the new
-hardware suite, fresh-user setup or consumer release can be qualified.
+That was the build-time result; the subsequent retry below is separate evidence.
+The immutable archive's `build-info.json` retains `hardware_qualified=false`.
+
+### October 14 approved package retry
+
+The device owner independently configured an ASR-only exclusion for the exact
+retained CLI and requested a retry. The agent changed no security settings.
+The unchanged CLI's `--help`, minimal-system-PATH `npu doctor --json`, and exact
+packaged native server's `--version` now exit successfully. Doctor alone still
+does not verify inference. No separate native exemption was requested by the agent;
+the reason its launch behavior changed is not established.
+
+Two complete runs of the versioned hardware suite each pass all 37 subtests:
+20 exact normal completions, controls, Ollama/OpenAI chat, unsupported requests,
+stream termination, disconnect recovery, unload/reload and CPU GGUF/QNN switching.
+The server used the existing isolated store/runtime on a dedicated loopback port,
+with no developer PATH, downloads, publication or original model changes.
+The owned server was stopped after testing.
+
+The first actual harness execution exposed ambiguous color casing and an invalid
+assumption that active repetition penalties preserve the ordinary answer. The
+prompt now explicitly requests `BLUE`; ordinary outputs remain exact/case-sensitive.
+Repetition checks require bounded deterministic output and exact restoration when
+the window is zero. The penalty-mode arithmetic answer was incorrect (`10`):
+its functional check is **not a model-quality approval**. Failed runs are retained.
+Helpers, file-scoped harness vet and ORT regression suites pass; whole integration
+vet reports existing non-test-goroutine `Fatalf` calls in unrelated tests.
+
+Evidence binds the immutable package hashes above to harness SHA256
+`09588c1ed7427937307cb2d9af6ae9e04c2d0a0db8b59bbd1dc0f703a2edbcaf`.
+Native logs and a live owned-child module inventory confirm loaded verified ORT/QNN,
+`QnnHtp.dll`, `QnnHtpV73Stub.dll` and `libcdsprpc.dll` during compiled-context inference.
+This is not per-node profiling, accelerator-only placement or energy evidence.
+Native context-load (`0x1392`) and shutdown warnings also occur in the earlier
+successful baseline; they are preserved, not silently classified as harmless.
+All 32 extracted inventory entries and the original archive remain unchanged.
+
+This closes F0's local packaged execution check, **not F1 or a consumer release**.
+Package source `4e18dc1d` predates the new compatibility declaration/verified-loader
+code. That route, fresh-user/clean-machine setup, broader quality, signing and
+authorized hosted distribution still require their own evidence.
 
 ## GGUF/Hexagon is a separate route
 
