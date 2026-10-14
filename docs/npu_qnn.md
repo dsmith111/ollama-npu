@@ -195,6 +195,43 @@ Full vet also reports existing unsafe-pointer warnings outside the scoped
 packages. Public registry round-trips, clean-machine installation and other
 devices/backends remain release gates.
 
+### October 14 packaging checkpoint
+
+The portable builder produced a clean-checkout package from source
+`4e18dc1de9a283dd201ff3be02fac0736f3a861e`, using Go `1.26.1`,
+LLVM-MinGW UCRT ARM64 `20261006` (Clang `23.1.3`), Windows SDK `10.0.26100.0`
+and native pin `b11521` (llama.cpp commit `b42b7e6d3`). The archive is
+`ollama-npu-windows-arm64-0.0.0-npu.dev.4e18dc1de9a2.zip`, SHA256:
+`e28aaec6091ce608ee2f5540ce35914211096d8215eeb6f8fdc661888253b774`.
+It is a retained local development artifact, **not a published release**.
+
+- Clean build, native ARM64/ARM64X/import audit, runtime/license inventory,
+  extracted archive hashes and all 32 inventoried files passed verification.
+  Private CGo wrappers and a prebuilt native payload were not used.
+- Clean-checkout focused Go tests/scoped vet, qualification helper tests and UI
+  build/220 tests pass. No-opt-in hardware qualification correctly skips; that
+  skip is not hardware evidence.
+- Standard-toolchain full Go tests: 74 packages pass, three fail and 31 skip/have
+  no tests. All three failing packages reproduce the same failures on official
+  `8718c2bd`: Windows symlink privileges (`manifest`, `compatmigrate`) and Codex
+  auth mode (`cmd/launch`, 666 versus 600). The earlier MSVC-wrapper compiler
+  blockers do not reproduce with this toolchain.
+- Full vet still reports existing unsafe-pointer/SliceHeader warnings. The
+  unchanged UI lint baseline has 112 errors/14 warnings; `npm ci` reports 61
+  dependency audit findings, not independently assessed here. Desktop/UI assets
+  are excluded from this portable package.
+- **Packaged execution is unqualified.** Launching the development package's CLI
+  and native server was denied by administrator-managed Microsoft Defender ASR:
+  event `1121`, rule `C1DB55AB-C21A-4637-BB3F-A12568109D35`. No protection,
+  exclusion, trust, boot or driver settings were changed. No server was started,
+  and the new Go hardware suite has not run against the packaged binary.
+
+`build-info.json` therefore retains `hardware_qualified=false`. The October 13
+QNN run above remains valid evidence for its separately identified binary, not
+for this newly compiled package. An approved signing/execution workflow or an
+approved test machine must permit packaged CLI/native launch before the new
+hardware suite, fresh-user setup or consumer release can be qualified.
+
 ## GGUF/Hexagon is a separate route
 
 Current upstream llama.cpp has a Snapdragon Hexagon backend that can execute
