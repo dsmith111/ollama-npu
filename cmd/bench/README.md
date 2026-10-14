@@ -83,12 +83,51 @@ Limits:
 
 ## Command Line Options
 
+### Decision models
+
+```sh
+go run ./cmd/bench -model tev1:latest -decision cases.jsonl -format csv
+```
+
+Each JSONL line supplies a request and expected answers; datasets are external:
+
+```json
+{"id":"message","dataset":"example","request":{"state":"I am angry.","questions":{"angry":{"type":"noul","instructions":"Is the speaker angry?","criteria":{}}}},"expected":{"angry":{"noul":true}}}
+```
+
+Omit `request.model` and `keep_alive`. Each question needs an expectation:
+`{"choice":"label"}`, `{"noul":true}`, `{"level":2}` (unique most probable score
+class), or `{"min":1.5,"max":2}` (inclusive expected-score range). Optional
+`image_files` paths are relative to the JSONL; inline `request.images` also works.
+
+`-epochs` replays the corpus unchanged; `-warmup` counts untimed requests.
+`score` reports accuracy; `regression` requires 100%. HTTP/invalid-response errors
+fail either mode. Stderr summaries report accuracy, latency percentiles and
+requests/questions per second; CSV retains per-request results and input sizes.
+CSV separates label `mismatches` from HTTP/invalid-response `error` values.
+Summary percentiles use HTTP round-trip latency, including server queueing.
+Compare identical corpora, model artifacts and settings on the same host. HTTP
+latency includes model lookup and request setup, so warm runs capture routing and
+metadata-cache improvements as well as inference. Use `-k 0 -concurrency 1` and a
+warmup pass (`-warmup` equal to the corpus length) for this comparison. A warm
+model does not imply uncached prompts: replay may reuse prefixes; inspect
+`cached_input_tokens`. Group latency by input size and question count when
+comparing different workloads.
+
+`-concurrency` currently requires `-decision`: 1 sends back-to-back requests;
+higher values keep that many requests in flight. Cold runs (`-k > 0`) require 1.
+Integration uses the same file via `OLLAMA_TEST_DECISION_FILE`, defaults to
+`.cache/decision-data/regression.jsonl` in the repo, and skips when absent.
+`OLLAMA_TEST_MODEL` selects the model. Integration requires every case to pass;
+use bench in score mode with the broad corpus to evaluate model quality.
+
+### Options
+
 | Option  	| Description | Default |
 |----------|-------------|---------|
 | -model	| Comma-separated list of models to benchmark	| (required)		|
 | -epochs	| Number of iterations per model		| 6			|
 | -max-tokens	| Maximum tokens for model response		| 200			|
-| -num-ctx	| Context length (num_ctx); recommended for ORT GenAI	| 0 (not set)		|
 | -temperature	| Temperature parameter				| 0.0			|
 | -seed		| Random seed					| 0 (random)		|
 | -timeout	| Timeout in seconds				| 300			|
@@ -99,6 +138,10 @@ Limits:
 | -output	| Output file for results			| "" (stdout)		|
 | -warmup	| Number of warmup requests before timing	| 1			|
 | -prompt-tokens	| Generate a prompt of exactly N tokens (0 = use -p)	| 0		|
+| -decision | External decision JSONL corpus instead of chat | "" |
+| -decision-url | External System One endpoint; server manages loading | "" |
+| -decision-mode | `score` reports accuracy; `regression` requires 100% | score |
+| -concurrency | Maximum in-flight requests (currently requires `-decision`) | 1 |
 | -num-ctx	| Context size (0 = server default)		| 0		|
 | -openai	| OpenAI-compatible API base URL		| ""		|
 | -api-key	| API key for OpenAI endpoint (or OPENAI_API_KEY)	| ""		|
@@ -168,12 +211,19 @@ Additionally, the model info comment line (displayed once per model before epoch
 
 ## NPU Benchmarking
 
-For NPU (ORT GenAI) models, **always set `-num-ctx`** to avoid KV allocation errors:
+For ORT GenAI models, use the bundle's supported context and leave room for
+generation after the rendered prompt:
 
 ```
-./ollama-bench -model phi3:mini -epochs 8 -num-ctx 512 -prompt-tokens 512 -max-tokens 128
+./ollama-bench -model my-model:qnn -epochs 8 -num-ctx 512 -prompt-tokens 256 -max-tokens 128
 ```
 
-For automated CPU vs NPU comparisons, use the `scripts/bench-npu.ps1` script
-which manages separate `ollama serve` instances with different env vars per
-profile and runs cold + warm benchmarks. See `x/ortrunner/README.md` for details.
+Model names and successful timing results do not establish which accelerator
+executed. See [NPU qualification](../../docs/npu_qnn.md) for provider evidence,
+runtime compatibility and support limits.
+
+Decision JSONL cases may include `"cache":{"min":0.95}` (and/or `"max"`) to assert
+the reused fraction of input tokens. Run ordered cache scenarios with
+`-concurrency 1 -k 0 -warmup 0`; missing telemetry or failed assertions fail the run
+in either scoring mode. For a cold-cache first case, unload the model before the
+run and use `-epochs 1`. CSV includes `cached_input_tokens` when the server reports it.

@@ -558,7 +558,7 @@ func (c *Client) Detokenize(ctx context.Context, tokens []int) (string, error) {
 	return output.Content, err
 }
 
-func (c *Client) Embedding(context.Context, string) ([]float32, int, error) {
+func (c *Client) Embedding(context.Context, string, [][]byte) ([]float32, int, error) {
 	return nil, 0, errors.New("ORT GenAI does not support embeddings")
 }
 
