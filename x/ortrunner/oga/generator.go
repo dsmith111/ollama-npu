@@ -230,9 +230,9 @@ func (g *Generator) Terminate() error {
 	return ogaError(C.OgaGenerator_SetRuntimeOption(g.ctx, key, value))
 }
 
-// Shutdown cleans up global ORT GenAI state. Call once at program exit.
+// Shutdown cleans up an already loaded runtime. Call once at program exit.
 func Shutdown() {
-	if CheckInit() == nil {
+	if nativeLoaded.Load() {
 		C.OgaShutdown()
 	}
 }

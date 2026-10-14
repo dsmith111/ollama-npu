@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	ortruntime "github.com/ollama/ollama/x/ortrunner/runtime"
@@ -22,6 +23,7 @@ var initError error
 var initLoadError string
 var initOnce sync.Once
 var verifiedInitialization bool
+var nativeLoaded atomic.Bool
 
 // CheckInit returns any error that occurred during ORT GenAI dynamic library initialization.
 func CheckInit() error {
@@ -91,6 +93,7 @@ func tryLoadLibrary(path string) bool {
 		C.oga_dynamic_unload(&handle)
 		return false
 	}
+	nativeLoaded.Store(true)
 	slog.Info("loaded ORT GenAI dynamic library", "path", path)
 	return true
 }
@@ -118,6 +121,7 @@ func tryLoadByName() bool {
 		return false
 	}
 
+	nativeLoaded.Store(true)
 	slog.Info("loaded ORT GenAI dynamic library", "name", libraryName)
 	return true
 }

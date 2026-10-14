@@ -2,9 +2,31 @@ package ortrunner
 
 import (
 	"errors"
+	"os"
+	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestExecuteValidatesModelBeforeRuntime(t *testing.T) {
+	if os.Getenv("OLLAMA_TEST_MODEL_PREFLIGHT") == "1" {
+		err := Execute([]string{"--model", t.TempDir(), "--auth-token", "local-test-token"})
+		if err == nil || !strings.Contains(err.Error(), "genai_config.json") {
+			t.Fatalf("expected model validation before native initialization, got %v", err)
+		}
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestExecuteValidatesModelBeforeRuntime$")
+	cmd.Env = append(os.Environ(), "OLLAMA_TEST_MODEL_PREFLIGHT=1", "OLLAMA_DEBUG=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("model preflight subprocess: %v\n%s", err, output)
+	}
+	if strings.Contains(string(output), "loaded ORT GenAI dynamic library") {
+		t.Fatalf("invalid model initialized the native runtime:\n%s", output)
+	}
+}
 
 type fakeModelResource struct {
 	name   string

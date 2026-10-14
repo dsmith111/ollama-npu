@@ -44,9 +44,6 @@ func Execute(args []string) error {
 	if token == "" {
 		slog.Warn("legacy direct ORT runner allows unauthenticated loopback requests; set OLLAMA_ORT_RUNNER_TOKEN for child isolation")
 	}
-	if err := oga.CheckInit(); err != nil {
-		return fmt.Errorf("ORT GenAI not available: %w", err)
-	}
 	sigCtx, sigCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer sigCancel()
 	var runner Runner

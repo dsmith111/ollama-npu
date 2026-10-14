@@ -184,8 +184,9 @@ profile in `npu.compatibility`, or `legacy-unverified` when absent. Legacy model
 retain their previous loader behavior and emit an explicit compatibility warning.
 An absent profile is allowed; a malformed or case-aliased declaration is not.
 The October 13 local hardware assets remain unchanged, without newly invented
-metadata. The retained older package now runs, but this new declaration/verified-load
-route still needs separately identified current-source hardware qualification.
+metadata. The declaration/verified-load route now has separately identified local
+engineering-fixture evidence below; publisher-profile and clean-consumer
+qualification remain open.
 
 Affected Go suites/scoped vet, qualification helpers and CLI compilation pass.
 The full Go suite was rerun: 74 packages pass, three fail, 31 skip/have no tests.
@@ -413,8 +414,49 @@ All 32 extracted inventory entries and the original archive remain unchanged.
 
 This closes F0's local packaged execution check, **not F1 or a consumer release**.
 Package source `4e18dc1d` predates the new compatibility declaration/verified-loader
-code. That route, fresh-user/clean-machine setup, broader quality, signing and
-authorized hosted distribution still require their own evidence.
+code. The subsequent local route check below is separate; fresh-user/clean-machine
+setup, broader quality, signing and authorized hosted distribution remain open.
+
+### October 14 declared-loader check and startup fix
+
+A separately built current-source CLI launched normally without another exception.
+Its first real declared-model load exposed a startup bug: `Execute` initialized
+the unchecked legacy loader before `Runner.Load` could select verified loading.
+The child refused the declaration and the parent reported readiness EOF. This
+was a functional failure, not a fresh Defender denial.
+
+Startup now leaves initialization to model validation/loader selection. Shutdown
+only cleans up a successfully loaded runtime; a pre-native validation failure must
+not initialize a legacy runtime during cleanup. Both subprocess regressions fail
+before the fix and pass afterward. Affected ORT/server/CLI suites and scoped vet
+pass. Full Go regression retains the same 74 pass/three baseline failures/31
+skip-or-no-tests outcome.
+
+The fixed Go-only test CLI, SHA256
+`ac381468998e43dc7dc265e76146a003f7b1b73d0b1a3b7df96608861ae83aa7`,
+uses source `9d954419` plus the recorded startup patch and the unchanged F0 native
+payload. Its source is explicitly dirty; this is not a newly clean-built release
+archive. Two complete declared-model suites each pass 67 subtests, including 50
+exact normal requests: **100 exact requests total**, plus controls, chat,
+streaming/recovery and CPU/QNN switching. A separate legacy-model suite passes
+all 37 subtests. Live child modules confirm the exact approved GenAI DLL and QNN HTP.
+Wrong-target generation rejects before creating an ORT child; an actual direct
+runner also rejects an incomplete first runtime candidate without native-load/
+readiness announcements or fallback to the intact installed runtime.
+
+The two temporary declarations were **local engineering fixtures**, not publisher
+or license claims. Stage/provider/context values came from the unchanged config,
+the processor from the registry and runtime versions from verified installation.
+Precision was explicitly producer-undeclared and source provenance omitted.
+Original tags were not assigned declarations. Both owned tags/profile blobs/caches
+and the incomplete runtime fixture were removed, owned servers stopped, and all
+29 unique blobs referenced by the three original models were hash-verified intact.
+The original runtime/package remain unchanged.
+
+This validates the local verified-loader mechanism, not completion of F1's licensed
+publisher-profile, fresh-user/clean-machine and consumer recovery gates. The 100
+short requests do not replace longer-workload quality, reboot, memory or usability
+qualification; the penalty-mode quality issue and native warnings above remain.
 
 ## GGUF/Hexagon is a separate route
 
