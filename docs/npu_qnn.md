@@ -21,6 +21,12 @@ server.
   make it NPU-compatible.
 - Text inference is the initial scope. Tool use, structured output, vision and
   embeddings must not be assumed supported merely because a model imports.
+- The pinned Windows QNN file mapper mishandles non-ASCII directory names.
+  The fork uses a Windows-provided ASCII short-path alias only after verifying
+  that it identifies the same model directory. It does not move model files,
+  rewrite the bundle or change filesystem settings. Without a usable alias it
+  rejects the load before native initialization; this is not universal Unicode
+  filename support.
 
 Hardware detection and DLL loading are prerequisites, not proof that an
 inference request ran on the NPU. Likewise, a CPU/GPU completion is not QNN
@@ -60,6 +66,11 @@ $env:OLLAMA_ORT_PATH = 'C:\runtimes\ollama-qnn'
 
 `--validate-only` makes no installation changes. `--force` revalidates an
 immutable installation; it does not overwrite native libraries in use.
+
+After an abruptly terminated setup, retry at the same destination. A destination
+is published only after complete validation. Abrupt termination may leave an
+unused private `.ortgenai-install-*` staging directory; automatic orphan recovery
+remains a release follow-up. Do not delete unknown stages while installers run.
 
 The supported consumer runtime path does not require Python, Olive or the QNN
 SDK. Model production is a separate workflow.
@@ -289,6 +300,7 @@ hosted `ollama pull` goal. No model/vendor material was uploaded in this work.
 | `NPU_RUNTIME_INCOMPATIBLE` | Use a separately qualified model/fork tuple; do not mix DLL versions |
 | Declared model rejects a legacy runtime or QNN override | Select a fresh setup-verified directory and remove backend/SoC/HTP overrides |
 | `NPU_PROFILE_LOAD_FAILED` | A declaration is not hardware proof; preserve config/runtime and check the publisher's target and OEM driver |
+| `NPU_MODEL_PATH_UNSUPPORTED` | Windows supplied no usable ASCII alias for the QNN model directory; select an ASCII `OLLAMA_MODELS` directory or a separately qualified Unicode-capable runtime, without changing filesystem policy |
 | Requested setting is rejected | Use the supported option set; do not assume all llama.cpp options apply |
 | Prompt exceeds context | Use the bundle's qualified context, not a larger guessed `num_ctx` |
 | Chat exposes role tokens or produces poor output | Verify tokenizer, template and source/quantization quality |
@@ -457,6 +469,37 @@ This validates the local verified-loader mechanism, not completion of F1's licen
 publisher-profile, fresh-user/clean-machine and consumer recovery gates. The 100
 short requests do not replace longer-workload quality, reboot, memory or usability
 qualification; the penalty-mode quality issue and native warnings above remain.
+
+### October 14 isolated consumer-path fixes
+
+A new clean `3f034e72` package, including rebuilt native peers, launched normally
+and passed ten actual offline setup/doctor/recovery checks in an isolated profile
+with spaces and a non-ASCII name. Its CLI imported the local engineering fixture,
+but QNN context loading failed on that directory. The pinned supplier
+[Windows file mapper](https://github.com/microsoft/onnxruntime/blob/v1.24.1/onnxruntime/core/providers/qnn/builder/qnn_windows_file_mapper.cc)
+widens narrow path bytes directly before `CreateFile2`. The model-directory alias
+bridge above preserves the original files and runtime identity.
+
+Consumer testing also exposed a terminal callback deadlock in ordinary
+`/api/generate`: the callback tokenized the conversation while the client held
+its operation lock. The client now validates the stream through EOF, rejects
+trailing data and releases the lock before delivering terminal success. Startup
+errors retain a bounded, fully drained child-error tail instead of only readiness
+EOF. Reproducing unit tests and affected suites/scoped vet pass.
+
+The separately identified dirty developer CLI with the first two fixes passed
+all 39 hardware subtests: 20 exact normal prompts plus controls, templated
+completion/stream conversation tokens, chat, cancellation, unload/reload and
+ordinary CPU GGUF/QNN switching in the unchanged Unicode store. Actual CLI run,
+new-directory online acquisition, same-destination retry after forced installer
+termination, and refusal to take over an owned occupied port also passed.
+The original archive and user assets were not overwritten.
+
+This is process-environment isolation on the same developer Windows account,
+not a clean machine or new account. No stock installation was found; an owned
+port-holder test is not stock-service coexistence. Final clean-package
+qualification, licensed publisher provenance, no-alias Unicode support,
+reboot/longer-workload quality and usability remain open release gates.
 
 ## GGUF/Hexagon is a separate route
 

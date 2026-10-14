@@ -152,21 +152,16 @@ func startClient(ctx context.Context, opts ClientOptions, cmd *exec.Cmd) (*Clien
 	if err != nil {
 		return nil, fmt.Errorf("open runner stdout: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		stdout.Close()
-		return nil, fmt.Errorf("open runner stderr: %w", err)
-	}
+	// exec.Cmd.Wait drains this writer before publishing the child's exit.
+	cmd.Stderr = io.MultiWriter(os.Stderr, runnerStderr{c})
 	c.guard, err = newProcessGuard(cmd)
 	if err != nil {
 		stdout.Close()
-		stderr.Close()
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
 		c.guard.Close()
 		stdout.Close()
-		stderr.Close()
 		return nil, fmt.Errorf("start ORT runner: %w", err)
 	}
 	if err := c.guard.Attach(cmd.Process); err != nil {
@@ -208,18 +203,6 @@ func startClient(ctx context.Context, opts ClientOptions, cmd *exec.Cmd) (*Clien
 		}
 	}()
 	go func() {
-		scanner := bufio.NewScanner(stderr)
-		scanner.Buffer(make([]byte, 64<<10), maxRunnerLineBytes)
-		for scanner.Scan() {
-			line := scanner.Text()
-			fmt.Fprintln(os.Stderr, line)
-			c.setLastErr(line)
-		}
-		if err := scanner.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
-			c.setLastErr(fmt.Sprintf("read runner stderr: %v", err))
-		}
-	}()
-	go func() {
 		c.doneErr = cmd.Wait()
 		close(c.done)
 	}()
@@ -244,7 +227,11 @@ func startClient(ctx context.Context, opts ClientOptions, cmd *exec.Cmd) (*Clien
 		err = c.Ping(startCtx)
 	}
 	if err != nil {
-		return nil, errors.Join(err, c.Close())
+		closeErr := c.Close()
+		if c.HasExited() {
+			err = errors.Join(err, c.exitError())
+		}
+		return nil, errors.Join(err, closeErr)
 	}
 	slog.Info("ORT runner ready", "pid", cmd.Process.Pid, "port", c.port, "provider", event.Provider, "context", event.ContextLength)
 	return c, nil
@@ -275,13 +262,19 @@ func setChildEnv(env []string, key, value string) []string {
 	return append(out, key+"="+value)
 }
 
-func (c *Client) setLastErr(message string) {
-	if len(message) > maxRunnerErrorBytes {
-		message = message[len(message)-maxRunnerErrorBytes:]
-	}
+type runnerStderr struct {
+	client *Client
+}
+
+func (w runnerStderr) Write(data []byte) (int, error) {
+	c := w.client
 	c.lastErrLk.Lock()
-	c.lastErr = message
+	c.lastErr += string(data)
+	if len(c.lastErr) > maxRunnerErrorBytes {
+		c.lastErr = c.lastErr[len(c.lastErr)-maxRunnerErrorBytes:]
+	}
 	c.lastErrLk.Unlock()
+	return len(data), nil
 }
 
 func (c *Client) exitError() error {
@@ -423,7 +416,8 @@ func (c *Client) Completion(ctx context.Context, req llm.CompletionRequest, fn f
 	if err := c.acquire(ctx); err != nil {
 		return err
 	}
-	defer func() { <-c.operations }()
+	release := sync.OnceFunc(func() { <-c.operations })
+	defer release()
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	// Closing the child also bounds a blocked native call after the HTTP client
@@ -441,13 +435,23 @@ func (c *Client) Completion(ctx context.Context, req llm.CompletionRequest, fn f
 		return err
 	}
 	defer resp.Body.Close()
-	return readCompletionStream(resp.Body, fn)
+	return readCompletionStream(resp.Body, func(response llm.CompletionResponse) {
+		if response.Done {
+			// Generate's terminal callback tokenizes its returned conversation.
+			release()
+		}
+		fn(response)
+	})
 }
 
 func readCompletionStream(reader io.Reader, fn func(llm.CompletionResponse)) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), maxRunnerLineBytes)
+	var terminal *llm.CompletionResponse
 	for scanner.Scan() {
+		if terminal != nil {
+			return errors.New("ORT stream returned data after its terminal response")
+		}
 		var raw CompletionResponse
 		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
 			return fmt.Errorf("invalid ORT response: %w", err)
@@ -459,17 +463,23 @@ func readCompletionStream(reader io.Reader, fn func(llm.CompletionResponse)) err
 			raw.PromptEvalCount < 0 || raw.EvalCount < 0 || raw.PromptEvalDuration < 0 || raw.EvalDuration < 0 {
 			return errors.New("invalid ORT response metrics or done reason")
 		}
-		fn(llm.CompletionResponse{
+		response := llm.CompletionResponse{
 			Content: raw.Content, Done: raw.Done, DoneReason: llm.DoneReason(raw.DoneReason),
 			PromptEvalCount: raw.PromptEvalCount, PromptEvalDuration: raw.PromptEvalDuration,
 			EvalCount: raw.EvalCount, EvalDuration: raw.EvalDuration,
-		})
+		}
 		if raw.Done {
-			return nil
+			terminal = &response
+		} else {
+			fn(response)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read ORT response: %w", err)
+	}
+	if terminal != nil {
+		fn(*terminal)
+		return nil
 	}
 	return fmt.Errorf("ORT stream ended without a terminal response: %w", io.ErrUnexpectedEOF)
 }

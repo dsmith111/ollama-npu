@@ -61,6 +61,12 @@ func (r *Runner) Load(modelDir string) error {
 		if err := profile.CheckHost(plan.name); err != nil {
 			return err
 		}
+	}
+	nativeDir, err := nativeModelDirectory(modelDir, plan.name)
+	if err != nil {
+		return err
+	}
+	if profile != nil {
 		if err := oga.CheckInitVerified(); err != nil {
 			return err
 		}
@@ -71,7 +77,7 @@ func (r *Runner) Load(modelDir string) error {
 		}
 	}
 	cfg, model, tok, err := loadConfiguredModel(
-		func() (*oga.Config, error) { return oga.NewConfig(modelDir) },
+		func() (*oga.Config, error) { return oga.NewConfig(nativeDir) },
 		func(cfg *oga.Config) error {
 			if !plan.preserve {
 				if err := cfg.ClearProviders(); err != nil {

@@ -534,6 +534,30 @@ func TestNPUQualification(t *testing.T) {
 			t.Logf("latency_state=%s sample=%d wall=%s (not a throughput/energy measurement)", state, i+1, elapsed)
 		})
 	}
+	t.Run("templated_completion_context", func(t *testing.T) {
+		p := npuPrompts[0]
+		req := npuGenerateRequest(c.npuModel, p.text)
+		req.Raw, req.Prompt = false, p.text
+		result, _ := h.generateResponse(t, req)
+		if err := npuValidateGeneration(result, c.npuModel, p.want, "stop", 32); err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Context) == 0 {
+			t.Fatal("templated completion did not return conversation tokens")
+		}
+	})
+	t.Run("templated_stream_context", func(t *testing.T) {
+		p := npuPrompts[1]
+		req := npuGenerateRequest(c.npuModel, p.text)
+		req.Raw, req.Prompt = false, p.text
+		result := h.streaming(t, req, false)
+		if err := npuValidateGeneration(result, c.npuModel, p.want, "stop", 32); err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Context) == 0 {
+			t.Fatal("templated stream did not return conversation tokens")
+		}
+	})
 	t.Run("token_limit_one", func(t *testing.T) {
 		req := npuGenerateRequest(c.npuModel, npuPrompts[1].text)
 		req.Options["num_predict"] = 1

@@ -90,6 +90,35 @@ func TestClientRejectsUnsupportedRequests(t *testing.T) {
 	}
 }
 
+func TestClientTerminalCallbackCanTokenize(t *testing.T) {
+	client := testHTTPClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/completion":
+			fmt.Fprintln(w, `{"content":"hi","done":false}`)
+			fmt.Fprintln(w, `{"done":true,"done_reason":0}`)
+		case "/v1/tokenize":
+			fmt.Fprintln(w, `[1,2,3]`)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	var tokenErr error
+	var tokens []int
+	err := client.Completion(ctx, llm.CompletionRequest{Prompt: "hello"}, func(response llm.CompletionResponse) {
+		if response.Done {
+			tokens, tokenErr = client.Tokenize(ctx, "hello"+response.Content)
+		}
+	})
+	if err != nil || tokenErr != nil || len(tokens) != 3 {
+		t.Fatalf("terminal callback blocked tokenization: completion=%v tokenization=%v tokens=%v", err, tokenErr, tokens)
+	}
+	if len(client.operations) != 0 {
+		t.Fatal("operation lock retained after terminal callback")
+	}
+}
+
 func TestClientRequiresTerminalStream(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -103,12 +132,23 @@ func TestClientRequiresTerminalStream(t *testing.T) {
 		{"invalid reason", `{"done":true,"done_reason":99}`, false},
 		{"backend error", `{"error":{"StatusCode":500,"error":"failed"}}`, false},
 		{"terminal", `{"done":true,"done_reason":0}`, true},
+		{"duplicate terminal", "{\"done\":true}\n{\"done\":true}\n", false},
+		{"data after terminal", "{\"done\":true}\n{\"content\":\"extra\"}\n", false},
+		{"invalid data after terminal", "{\"done\":true}\ninvalid\n", false},
 		{"large fragment", `{"content":"` + strings.Repeat("a", 128<<10) + `","done":true}`, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := readCompletionStream(strings.NewReader(test.body), func(llm.CompletionResponse) {})
+			terminalCalls := 0
+			err := readCompletionStream(strings.NewReader(test.body), func(response llm.CompletionResponse) {
+				if response.Done {
+					terminalCalls++
+				}
+			})
 			if (err == nil) != test.ok {
 				t.Errorf("err=%v", err)
+			}
+			if !test.ok && terminalCalls != 0 {
+				t.Error("corrupt stream published a terminal success")
 			}
 		})
 	}
@@ -157,6 +197,20 @@ func TestClientExitIsPersistent(t *testing.T) {
 		if !c.HasExited() {
 			t.Fatal("lost child exit state")
 		}
+	}
+}
+
+func TestRunnerStderrKeepsBoundedTail(t *testing.T) {
+	client := &Client{}
+	writer := runnerStderr{client}
+	for _, text := range []string{strings.Repeat("x", 2*maxRunnerErrorBytes), "error split ", "across writes\n"} {
+		n, err := writer.Write([]byte(text))
+		if err != nil || n != len(text) {
+			t.Fatalf("stderr write=%d, error=%v", n, err)
+		}
+	}
+	if len(client.lastErr) != maxRunnerErrorBytes || !strings.HasSuffix(client.lastErr, "error split across writes\n") {
+		t.Fatalf("lost bounded error tail: length=%d", len(client.lastErr))
 	}
 }
 
@@ -247,6 +301,17 @@ func TestClientStartupCancellation(t *testing.T) {
 	}
 }
 
+func TestClientStartupReportsLoadFailure(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestORTClientHelper$")
+	cmd.Env = append(os.Environ(), "OLLAMA_TEST_ORT_HELPER=load-error")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	client, err := startClient(ctx, ClientOptions{ModelDir: t.TempDir()}, cmd)
+	if client != nil || err == nil || !strings.Contains(err.Error(), "NPU_MODEL_PATH_UNSUPPORTED") {
+		t.Fatalf("startup hid the actionable load failure: client=%v error=%v", client, err)
+	}
+}
+
 func TestClientCancellationRetiresChild(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestORTClientHelper$")
 	cmd.Env = append(os.Environ(), "OLLAMA_TEST_ORT_HELPER=blocked")
@@ -269,6 +334,12 @@ func TestORTClientHelper(t *testing.T) {
 	mode := os.Getenv("OLLAMA_TEST_ORT_HELPER")
 	if mode == "" {
 		return
+	}
+	if mode == "load-error" {
+		fmt.Fprintln(os.Stderr, "Error: NPU_MODEL_PATH_UNSUPPORTED: no usable ASCII alias")
+		os.Stdout.Close()
+		time.Sleep(100 * time.Millisecond)
+		os.Exit(1)
 	}
 	if mode == "hang" {
 		for {
