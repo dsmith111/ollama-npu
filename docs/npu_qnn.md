@@ -115,6 +115,42 @@ compiled context graphs. The actual config references determine the required
 assets; a nonzero `.bin` beside an invalid ONNX wrapper is not a usable model.
 Compiled target assets must be validated on compatible hardware.
 
+### Provenance of the two existing Phi-3 tags
+
+Read-only reconciliation on October 15 traced the existing public
+[`dsmith111/phi3`](https://ollama.com/dsmith111/phi3/tags) variants:
+
+| Tag | Established evidence | Boundary |
+| --- | --- | --- |
+| `mini-qnn` | Prebuilt [llmware/phi-3-mini-4k-instruct-onnx-qnn at `6fa72cea`](https://huggingface.co/llmware/phi-3-mini-4k-instruct-onnx-qnn/tree/6fa72cea4103de0bc69792a6655be538a8c4d7e0): 11 of 19 upstream assets match raw bytes, including all four context binaries and all four graphs; the other eight match after CRLF-to-LF normalization only | Phi-3 Mini 4K, not evidence of a local Phi-3.5 conversion. `_publish_manifest.json` is an additional local inventory |
+| `mini-qnn-exported` | Local `npu-model 0.1.0` export/packing receipt, historical notes and cached `microsoft/Phi-3-mini-4k-instruct` revision `f39ac1d28e925b323eae81227eaba4464caced4e`; actual graph contains 293 FP16 initializers, uses `model.onnx.data` (7,643,004,928 bytes), and config has no explicit QNN provider | Portable FP16 ONNX export, not a demonstrated completed QNN/HTP conversion or current inference qualification |
+
+The full pinned prebuilt revision is
+`6fa72cea4103de0bc69792a6655be538a8c4d7e0`. Its
+[publisher card](https://huggingface.co/llmware/phi-3-mini-4k-instruct-onnx-qnn/blob/6fa72cea4103de0bc69792a6655be538a8c4d7e0/README.md)
+declares int4, Apache-2.0 and QAIRT 2.36 / ORT 1.22.2 / GenAI 0.9.
+Those are **publisher claims**, distinct from this fork's locally tested
+GenAI 0.12.2 / ORT 1.24.1 tuple. The older
+[`llmware/phi-3.5-onnx-qnn`](https://huggingface.co/llmware/phi-3.5-onnx-qnn)
+has different context/graph hashes. Shared tokenizer files alone do not identify
+model weights. This match identifies the published artifact source, not a
+reproduced producer build or an exact training/base-weight revision.
+
+Anonymous hosted manifest GETs returned both variants with all local layer
+names, sizes and digests preserved. `mini-qnn` manifest SHA256 is
+`ba2dd340f68dd727927bb51471764fb442522b96bb7d3d8e091912244b5eb1b7`.
+The exported tag has identical descriptors but a differently serialized remote
+manifest. This establishes existing public descriptor retention, **not** a fresh
+empty-store blob pull/run, stock-Ollama support or authorization for new uploads.
+No model weights were downloaded or uploaded during reconciliation.
+
+Neither existing tag includes a license layer; the pinned prebuilt repository
+declares Apache-2.0 in its card but contains no standalone LICENSE file. Before
+distributing a new derived package, preserve source/card attribution, applicable
+license text/notices and the exact local changes. Do not apply the Apache label
+to proprietary runtime DLLs. The separately tested file-mapping workaround below
+changes only two config options relative to this traced local bundle.
+
 ### Older QNN contexts: load errors followed by teardown errors
 
 With the pinned GenAI 0.12.2 / ORT 1.24.1 runtime, an older compiled context can
@@ -323,23 +359,25 @@ registry acceptance and target compatibility are separate from local packaging.
 
 ### Distribution evidence and publication gates
 
-Primary-source research checked October 14, 2026:
+Primary-source research checked October 14, with artifact reconciliation October 15, 2026:
 
 | Item | Evidence | Consequence |
 | --- | --- | --- |
 | Microsoft runtime code | [GenAI 0.12.2 MIT](https://raw.githubusercontent.com/microsoft/onnxruntime-genai/v0.12.2/LICENSE) and [ORT 1.24.1 MIT](https://raw.githubusercontent.com/microsoft/onnxruntime/v1.24.1/LICENSE) | Preserve notices; package version/dependency minima do not certify compiled contexts |
 | Qualcomm runtime components | ORT's [QNN build copies the SDK license](https://raw.githubusercontent.com/microsoft/onnxruntime/v1.24.1/cmake/onnxruntime_providers_qnn.cmake); exact installed `licenses\microsoft.ml.onnxruntime.qnn\Qualcomm_LICENSE.pdf` SHA256 `ec1dccfdcba5c6e64126e84199b8362bf4999107bfa567ebe831dbb4c461692b` | AI Stack license section 1 allows object-code distribution incorporated in an application, not standalone redistribution; sections 2, 3 and 10 add notice/use/rights/export obligations. This is not blanket permission for runtime/model mirrors |
-| Original Phi-3 weights | [Microsoft source MIT license at fixed revision](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/raw/f39ac1d28e925b323eae81227eaba4464caced4e/LICENSE) | Does not establish the provenance/terms of this existing compiled derivative |
-| Existing local derivative | Preserved manifest has no license layer or immutable source revision; `_publish_manifest.json` is an asset hash inventory, not provenance evidence | Do not upload it based only on successful inference or the original weights' license |
+| Original Phi-3 weights | [Microsoft source MIT license at fixed revision](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/raw/f39ac1d28e925b323eae81227eaba4464caced4e/LICENSE) | Historical local export source; not the separately compiled derivative's full production history |
+| Existing local derivative | [Pinned llmware source/card](https://huggingface.co/llmware/phi-3-mini-4k-instruct-onnx-qnn/tree/6fa72cea4103de0bc69792a6655be538a8c4d7e0), traced by 11 raw-byte and eight CRLF-only asset matches; card declares Apache-2.0/int4 | Source identity is established; original manifest still lacks license/source layers. Review applicable terms and propagate notices/changes in a derived package; inventory alone is not a license |
 | Other catalog artifacts | [Microsoft ONNX catalog](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-onnx) lists other execution targets; [Qualcomm Phi-3.5](https://huggingface.co/qualcomm/Phi-3.5-mini-instruct) offers GENIE/QAIRT artifacts | Different model/runtime/artifact route, not an established drop-in ORT bundle or license for the local derivative |
-| Hosted model protocol | [Documented imports](https://docs.ollama.com/import) and [push API](https://docs.ollama.com/api/push) do not promise ORT named-layer support or a private/unlisted push selector | Client fixture success cannot establish hosted acceptance, descriptor preservation or privacy; a staging tag must not be assumed private |
+| Hosted model protocol | Existing public `dsmith111/phi3` manifest GETs preserve both variants' descriptors; [documented imports](https://docs.ollama.com/import) and [push API](https://docs.ollama.com/api/push) do not promise ORT support or private/unlisted publication | Narrow descriptor-retention evidence, not a complete fresh blob pull/run, ongoing service guarantee or privacy control |
 | Hosted service rights | [Ollama terms](https://ollama.com/terms), sections 4 and 7 | Competing-product/automated-access and branding provisions need clarification for fork registry use. The source MIT license is not a hosted-service authorization |
 
 This is engineering evidence, not a legal opinion. Obtain artifact-specific
 rights/provenance review for source weights, generated contexts and any included
 vendor software; preserve the applicable notices and review runtime terms before
-acquisition. No definitive compiled-output grant was established for the local
-bundle. The portable fork archive contains no ORT/QNN DLLs or model weights.
+acquisition. The pinned prebuilt publisher's Apache-2.0 declaration now provides
+artifact-specific license evidence; it is not a grant for unrelated runtime
+components or proof of the producer's complete build/rights chain. The portable
+fork archive contains no ORT/QNN DLLs or model weights.
 
 Before any hosted test:
 
