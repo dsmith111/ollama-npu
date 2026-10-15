@@ -828,7 +828,7 @@ func TestSchedUseLoadedRunner(t *testing.T) {
 	}
 	finished := make(chan *LlmRequest)
 	llm1 := &mockLlm{vramByGPU: map[ml.DeviceID]uint64{}}
-	r1 := &runnerRef{llama: llm1, sessionDuration: 1, numParallel: 1}
+	r1 := &runnerRef{llama: llm1, sessionDuration: 1, numParallel: 1, Options: &req.opts}
 	req.useLoadedRunner(r1, finished)
 	require.Equal(t, uint(1), r1.refCount)
 	require.Equal(t, time.Duration(2), r1.sessionDuration)

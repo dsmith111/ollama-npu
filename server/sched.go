@@ -59,6 +59,8 @@ type LlmRequest struct {
 	contextShift bool
 	shift        *bool
 	ortOptions   *ortrunner.ClientOptions
+	assigned     *runnerRef
+	released     bool // protected by assigned.refMu
 }
 
 type Scheduler struct {
@@ -260,9 +262,7 @@ func (s *Scheduler) getRunner(c context.Context, m *Model, opts api.Options, ses
 	s.loadedMu.Lock()
 	runner := s.loaded[key]
 	s.loadedMu.Unlock()
-	if runner != nil && !runner.needsReload(c, req) {
-		req.useLoadedRunner(runner, s.finishedReqCh)
-	} else {
+	if runner == nil || runner.needsReload(c, req) || !req.useLoadedRunner(runner, s.finishedReqCh) {
 		select {
 		case s.pendingReqCh <- req:
 		default:
@@ -310,6 +310,10 @@ func (s *Scheduler) processPending(ctx context.Context) {
 			}
 
 			for {
+				if err := pending.ctx.Err(); err != nil {
+					pending.errCh <- err
+					break
+				}
 				runnerLimit := maxRunners
 				if configuredMaxRunners == 0 && pending.ortOptions != nil {
 					// QNN shares system memory and has no native VRAM fit estimator.
@@ -333,8 +337,21 @@ func (s *Scheduler) processPending(ctx context.Context) {
 					} else {
 						// Runner is usable, return it
 						logutil.Trace("using existing loaded runner", "model", pendingKey)
-						pending.useLoadedRunner(runner, s.finishedReqCh)
-						break
+						if pending.useLoadedRunner(runner, s.finishedReqCh) {
+							break
+						}
+						runner.refMu.Lock()
+						idle := runner.idleCh
+						runner.refMu.Unlock()
+						if idle != nil {
+							select {
+							case <-idle:
+							case <-pending.ctx.Done():
+							case <-ctx.Done():
+								return
+							}
+						}
+						continue
 					}
 				} else if runnerLimit > 0 && loadedCount >= int(runnerLimit) {
 					slog.Debug("max runners achieved, unloading one to make room", "runner_count", loadedCount)
@@ -433,7 +450,10 @@ func (s *Scheduler) processPending(ctx context.Context) {
 				case <-s.unloadedCh:
 					slog.Debug("unload completed", "runner", runnerToExpire)
 					continue
+				case <-pending.ctx.Done():
+					pending.errCh <- pending.ctx.Err()
 				}
+				break
 			}
 		case <-s.unloadedCh:
 			// An unload request when there are no pending request can be ignored
@@ -450,16 +470,33 @@ func (s *Scheduler) processCompleted(ctx context.Context) {
 			slog.Debug("shutting down scheduler completed loop")
 			return
 		case finished := <-s.finishedReqCh:
-			finishedKey := schedulerModelKey(finished.model)
-			s.loadedMu.Lock()
-			runner := s.loaded[finishedKey]
-			s.loadedMu.Unlock()
+			runner := finished.assigned
 			if runner == nil {
-				slog.Error("finished request signal received after model unloaded", "modelPath", finishedKey)
+				slog.Error("finished request has no assigned runner", "modelPath", schedulerModelKey(finished.model))
 				continue
 			}
+			if runner.ortOptions != nil {
+				if idle, ok := runner.llama.(interface{ WaitUntilIdle(context.Context) error }); ok {
+					// Request cancellation precedes native teardown. Keep its
+					// reference until the client has drained that operation.
+					if err := idle.WaitUntilIdle(ctx); err != nil {
+						slog.Debug("stopped waiting for ORT operation", "error", err)
+						return
+					}
+				}
+			}
 			runner.refMu.Lock()
+			if finished.released || runner.refCount == 0 {
+				slog.Error("duplicate finished request signal", "runner", runner)
+				runner.refMu.Unlock()
+				continue
+			}
+			finished.released = true
 			runner.refCount--
+			if runner.refCount == 0 && runner.idleCh != nil {
+				close(runner.idleCh)
+				runner.idleCh = nil
+			}
 			if runner.refCount <= 0 {
 				if runner.sessionDuration <= 0 {
 					slog.Debug("runner with zero duration has gone idle, expiring to unload", "runner", runner)
@@ -516,8 +553,8 @@ func (s *Scheduler) processCompleted(ctx context.Context) {
 				s.loadedMu.Unlock()
 				runner.refMu.Unlock()
 				slog.Debug("duplicate expired event, ignoring", "runner", runner)
-			} else if runner.pid != runnerToUnload.pid {
-				// If the pids do not match, we likely had multiple load
+			} else if runner != runnerToUnload {
+				// If the generations do not match, we likely had multiple load
 				// failures for the same model in quick succession due to
 				// request context canceled and are draining the queue of
 				// events. Ensure the orphaned runner is properly shut down, but
@@ -550,10 +587,17 @@ func (s *Scheduler) processCompleted(ctx context.Context) {
 // Complete the pending request and send the runner back to the requester
 // Wires up a finished event after the request context is completed
 // Updates session duration, and resets expiration timer
-func (pending *LlmRequest) useLoadedRunner(runner *runnerRef, finished chan *LlmRequest) {
+func (pending *LlmRequest) useLoadedRunner(runner *runnerRef, finished chan *LlmRequest) bool {
 	runner.refMu.Lock()
 	defer runner.refMu.Unlock()
+	if pending.ctx.Err() != nil || runner.Options == nil || runner.ortOptions != nil && runner.refCount > 0 {
+		return false
+	}
+	pending.assigned = runner
 	runner.refCount++
+	if runner.ortOptions != nil {
+		runner.idleCh = make(chan struct{})
+	}
 	if runner.expireTimer != nil {
 		runner.expireTimer.Stop()
 		runner.expireTimer = nil
@@ -567,6 +611,7 @@ func (pending *LlmRequest) useLoadedRunner(runner *runnerRef, finished chan *Llm
 		slog.Debug("context for request finished", "runner", runner)
 		finished <- pending
 	}()
+	return true
 }
 
 // load creates a new model based on req and loads it. If requireFull is true then the model must be loaded fully onto GPUs
@@ -850,6 +895,10 @@ iGPUScan:
 			runner.pid = llama.Pid()
 		}
 		runner.refCount++
+		req.assigned = runner
+		if runner.ortOptions != nil {
+			runner.idleCh = make(chan struct{})
+		}
 		runner.loading = false
 		go func() {
 			<-req.ctx.Done()
@@ -1432,6 +1481,7 @@ func (s *Scheduler) updateFreeSpace(allGpus []ml.DeviceInfo) {
 type runnerRef struct {
 	refMu    sync.Mutex
 	refCount uint // prevent unloading if > 0
+	idleCh   chan struct{}
 
 	llama        llm.LlamaServer
 	pid          int

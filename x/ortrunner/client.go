@@ -351,7 +351,23 @@ func (c *Client) acquire(ctx context.Context) error {
 		<-c.operations
 		return errors.New("ORT runner is closed")
 	}
+	if err := ctx.Err(); err != nil {
+		<-c.operations
+		return err
+	}
 	return nil
+}
+
+// WaitUntilIdle lets the scheduler retain a cancelled request's reference until
+// its native operation and any required child retirement have completed.
+func (c *Client) WaitUntilIdle(ctx context.Context) error {
+	select {
+	case c.operations <- struct{}{}:
+		<-c.operations
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (c *Client) do(ctx context.Context, method, path string, value any) (*http.Response, error) {
@@ -493,6 +509,12 @@ func (c *Client) ApplyChatTemplate(context.Context, llm.ChatRequest) (string, er
 }
 
 func (c *Client) Ping(ctx context.Context) error {
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed || c.HasExited() {
+		return errors.New("ORT runner is closed")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	resp, err := c.do(ctx, http.MethodGet, "/v1/status", nil)

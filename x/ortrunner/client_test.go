@@ -43,6 +43,67 @@ func testHTTPClient(t *testing.T, handler http.HandlerFunc) *Client {
 	return c
 }
 
+func TestClientIdleWaitIncludesCancelledCompletion(t *testing.T) {
+	ready := make(chan struct{})
+	client := testHTTPClient(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, `{"content":"partial","done":false}`)
+		w.(http.Flusher).Flush()
+		close(ready)
+		<-r.Context().Done()
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	completed := make(chan error, 1)
+	go func() {
+		completed <- client.Completion(ctx, llm.CompletionRequest{Prompt: "hello"}, func(llm.CompletionResponse) {})
+	}()
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("completion did not start")
+	}
+	waitCtx, stop := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer stop()
+	if err := client.WaitUntilIdle(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("idle wait did not respect its deadline: %v", err)
+	}
+	cancel()
+	waitCtx, stop = context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	if err := client.WaitUntilIdle(waitCtx); err != nil {
+		t.Fatal(err)
+	}
+	client.mu.Lock()
+	closed := client.closed
+	client.mu.Unlock()
+	if !closed {
+		t.Fatal("idle signal preceded child retirement")
+	}
+	select {
+	case err := <-completed:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("interrupted completion did not fail: %v", err)
+		}
+	case <-waitCtx.Done():
+		t.Fatal("cancelled completion did not return")
+	}
+	if len(client.operations) != 0 {
+		t.Fatal("idle wait retained the operation slot")
+	}
+}
+
+func TestClientPingDoesNotReuseClosedChild(t *testing.T) {
+	client := testHTTPClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("closed child received a status request")
+	})
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Ping(t.Context()); err == nil {
+		t.Fatal("closed client reported ready")
+	}
+}
+
 func TestClientCompletionForwardsOptions(t *testing.T) {
 	client := testHTTPClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer secret" {

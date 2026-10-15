@@ -226,16 +226,20 @@ Media, embeddings, structured output, logprobs, min-p, nondefault typical-p,
 presence/frequency penalties and unsupported context-shifting controls are not
 silently approximated. Text chat requires the correct Ollama template.
 
-Requests are serialized within each child because the native API is not thread
-safe. With no explicit loaded-model limit, ORT requests use a conservative
+ORT requests are serialized at scheduler admission because the native API is not
+thread safe. Waiting requests remain in the bounded pending queue, rather than
+being assigned to an active child. With no explicit loaded-model limit, ORT requests use a conservative
 one-resident-model limit; ordinary GGUF keeps its upstream automatic policy.
 An explicit `OLLAMA_MAX_LOADED_MODELS` overrides that conservative limit.
 Cancellation retires the child when needed, so the next request may require a
 cold reload.
-Already assigned requests queued on that child can receive an explicit HTTP 500
-when another client's cancellation retires it. The server does not silently
-replay their prompts. Fresh requests recover through a new child; transparent
-multi-client recovery is not qualified.
+The scheduler retains the active request's reference until its client operation
+and required child retirement have drained. Undispatched requests can then use
+a replacement child, subject to their own cancellation/deadline and options.
+An interrupted active request still fails: its prompt or partial output is never
+automatically replayed. Ordinary GGUF admission remains parallel.
+The immutable `c8b363a0` package predates this admission fix; its already-assigned
+queued requests can still fail when the child retires.
 
 ## Publishing and pulling
 
@@ -615,12 +619,49 @@ performance/energy comparison.
   not be promoted into useful-context or broader quality certification.
 
 The stronger resilience/quality run is therefore **not an all-pass F3 result**.
-Licensed producer/reference-quality investigation, a safe multi-client recovery
-contract, longer sustained/resource tests, controlled reboot and usability remain
+Licensed producer/reference-quality investigation, longer sustained/resource tests, controlled reboot and usability remain
 open. No original artifact, configuration, runtime or security setting was
 changed to conceal these results. Owned trials/processes were removed; original
 model/runtime hashes, all five retained archives and prior qualification evidence
 were reverified unchanged.
+
+### Queued recovery and local prebuilt import checkpoint
+
+A separately identified Go-only ARM64 developer binary, SHA256
+`e76b803636003a41a183a96c1abb0f7de1866c1fd0e9d46caaa95fb99ef2fb53`,
+passed the following on the same Snapdragon engineering profile:
+
+- Ten active-stream disconnect rounds: **30 queued normal Generate requests**
+  returned exactly `4`, `Paris` or `BLUE`, including conversation tokens.
+  Ten independently queued 100 ms deadline requests expired instead of executing.
+- Three deliberate terminations of the exact owned child: active streams emitted
+  errors without terminal success; **nine queued raw requests** returned their
+  exact answers through different child PIDs.
+- The companion converter structurally checked the unchanged **21 assets/four
+  ONNX graphs**, reviewed a content/executable/Modelfile-bound plan, and explicitly
+  installed the bundle on the owned loopback server. All 21 named asset digests,
+  declaration, template and parameters were preserved. Six raw/normal Generate
+  checks and one chat check returned exact expected answers.
+- Live module hashes/directory identity again matched the pinned ORT/QNN runtime;
+  OEM DSP RPC remained separate. This is not per-node/accelerator-only proof.
+  Affected Go tests/vet/build pass; complete Go regression retains the three known
+  upstream Windows failures, not a newly introduced failure.
+
+The companion converter's local-folder commands are implemented, not proposed:
+from its source checkout install `python -m pip install -e ".[prebuilt]"`, then
+use `npu-model inspect-prebuilt` and plan-first `npu-model import-ollama`.
+Import requires an explicit compatible executable/loopback endpoint, a known-
+correct local Modelfile with Go TEMPLATE, and `--execute --expect-fingerprint`
+from the reviewed plan. Existing tags require explicit overwrite consent.
+There is no download, server startup, remote publication or native certification
+performed by those commands. Inspection and independent runtime checks are
+different evidence levels.
+
+These results qualify the bounded source/developer route, **not a new portable
+release archive** or arbitrary concurrent workloads. The unchanged `c8b363a0`
+archive and its original negative evidence are retained. Long-context quality,
+licensed producer/provenance, clean-host/stock coexistence, sustained/reboot/
+usability and authorized hosted distribution gates remain open.
 
 ## GGUF/Hexagon is a separate route
 

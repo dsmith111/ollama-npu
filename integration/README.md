@@ -141,6 +141,20 @@ or server configuration:
 go test -tags integration -run '^TestNPUQualificationHelpers$' -count=1 .\integration
 ```
 
+With the same explicit existing-model/nondefault-loopback opt-in, run the ORT
+queued-recovery regression separately:
+
+```powershell
+go test -tags integration -json -run '^TestNPUQueuedRecovery$' -count=1 -timeout 20m .\integration
+```
+
+It disconnects ten active streams, requires all 30 waiting normal Generate
+requests to return exact answers and conversation tokens, and requires ten queued
+100 ms deadlines to expire. It unloads only its explicitly selected NPU model.
+It does not kill a process, install/pull/upload a model, prove native placement or
+certify high concurrency. The immutable `c8b363a0` package predates the scheduler
+admission fix and does not satisfy this stronger test.
+
 Retain the `go test -json` evidence: `t.Logf` records the source Git revision and
 dirty-worktree flag, client/server versions, reported model digests, request
 outputs/options cases, and wall/API metrics for cold-after-unload and warm

@@ -300,6 +300,8 @@ func (s *Server) scheduleRunnerForModel(ctx context.Context, m *Model, caps []mo
 	case runner = <-runnerCh:
 	case err = <-errCh:
 		return nil, nil, nil, err
+	case <-ctx.Done():
+		return nil, nil, nil, ctx.Err()
 	}
 
 	return runner.llama, m, &opts, nil
@@ -806,7 +808,7 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 			}
 
 			if _, err := sb.WriteString(cr.Content); err != nil {
-				ch <- gin.H{"error": err.Error()}
+				sendInferenceResponse(c.Request.Context(), ch, gin.H{"error": err.Error()})
 			}
 
 			if cr.Done {
@@ -817,7 +819,7 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 				if !req.Raw {
 					tokens, err := r.Tokenize(c.Request.Context(), prompt+sb.String())
 					if err != nil {
-						ch <- gin.H{"error": err.Error()}
+						sendInferenceResponse(c.Request.Context(), ch, gin.H{"error": err.Error()})
 						return
 					}
 					res.Context = tokens
@@ -829,26 +831,26 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 				// visible content, otherwise generate logprobs disappear for models with
 				// builtin thinking/tool parsers.
 				if res.Response != "" || res.Thinking != "" || res.Done || len(res.ToolCalls) > 0 || len(res.Logprobs) > 0 {
-					ch <- res
+					sendInferenceResponse(c.Request.Context(), ch, res)
 				}
 
 				return
 			}
 
-			ch <- res
+			sendInferenceResponse(c.Request.Context(), ch, res)
 		}); err != nil {
 			if parserErr == nil {
 				s.sched.expireRunnersForRuntimeOOM(m, err)
 				var serr api.StatusError
 				if errors.As(err, &serr) {
-					ch <- gin.H{"error": serr.ErrorMessage, "status": serr.StatusCode}
+					sendInferenceResponse(c.Request.Context(), ch, gin.H{"error": serr.ErrorMessage, "status": serr.StatusCode})
 				} else {
-					ch <- gin.H{"error": err.Error()}
+					sendInferenceResponse(c.Request.Context(), ch, gin.H{"error": err.Error()})
 				}
 			}
 		}
 		if parserErr != nil {
-			ch <- gin.H{"error": parserErr.Error()}
+			sendInferenceResponse(c.Request.Context(), ch, gin.H{"error": parserErr.Error()})
 		}
 	}()
 
@@ -2612,6 +2614,15 @@ func waitForStream(c *gin.Context, ch chan any) {
 	c.JSON(http.StatusOK, latest)
 }
 
+// A disconnected stream no longer receives responses. Do not leave a native
+// completion blocked in its callback before it can retire the cancelled child.
+func sendInferenceResponse(ctx context.Context, ch chan any, response any) {
+	select {
+	case ch <- response:
+	case <-ctx.Done():
+	}
+}
+
 func streamResponse(c *gin.Context, ch chan any) {
 	c.Header("Content-Type", "application/x-ndjson")
 	c.Stream(func(w io.Writer) bool {
@@ -3372,7 +3383,7 @@ func (s *Server) ChatHandler(c *gin.Context) {
 
 				if res.Message.Content != "" || res.Message.Thinking != "" || len(res.Message.ToolCalls) > 0 || r.Done || len(res.Logprobs) > 0 {
 					slog.Log(ctx, logutil.LevelTrace, "builtin parser output", "parser", parserName, "content", content, "thinking", thinking, "toolCalls", toolCalls, "done", r.Done)
-					ch <- res
+					sendInferenceResponse(c.Request.Context(), ch, res)
 				} else {
 					slog.Log(ctx, logutil.LevelTrace, "builtin parser empty output", "parser", parserName)
 				}
@@ -3407,30 +3418,30 @@ func (s *Server) ChatHandler(c *gin.Context) {
 						logprobRes := res
 						logprobRes.Message.Content = ""
 						logprobRes.Message.ToolCalls = nil
-						ch <- logprobRes
+						sendInferenceResponse(c.Request.Context(), ch, logprobRes)
 					}
 
 					if r.Done {
 						res.Message.Content = toolParser.Content()
-						ch <- res
+						sendInferenceResponse(c.Request.Context(), ch, res)
 					}
 					return
 				}
 			}
 
-			ch <- res
+			sendInferenceResponse(c.Request.Context(), ch, res)
 		})
 		if parserErr != nil {
-			ch <- gin.H{"error": parserErr.Error()}
+			sendInferenceResponse(c.Request.Context(), ch, gin.H{"error": parserErr.Error()})
 			return
 		}
 		if err != nil {
 			s.sched.expireRunnersForRuntimeOOM(m, err)
 			var serr api.StatusError
 			if errors.As(err, &serr) {
-				ch <- gin.H{"error": serr.ErrorMessage, "status": serr.StatusCode}
+				sendInferenceResponse(c.Request.Context(), ch, gin.H{"error": serr.ErrorMessage, "status": serr.StatusCode})
 			} else {
-				ch <- gin.H{"error": err.Error()}
+				sendInferenceResponse(c.Request.Context(), ch, gin.H{"error": err.Error()})
 			}
 		}
 	}()
