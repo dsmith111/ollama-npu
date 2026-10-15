@@ -523,7 +523,42 @@ directory-alias helper between model and runtime loading fixes actual templated
 inference on those unchanged paths. The separately identified dirty CLI returned
 exactly `4`; eight live modules were hash-recorded, and file identity confirms
 their alias directory is the verified long runtime. A final clean package of
-this last fix is still required.
+this last fix was subsequently built; its execution gate is recorded below.
+
+### Final October 14 artifact and current administration gate
+
+Final clean source: `c8b363a0acaf7601ee9df9f5441d090bb1007ae1`. The path guard
+also includes the longest pinned provider DLL filename, not just the shorter
+GenAI filename. Focused suites/scoped vet pass; unsafe or missing aliases fail
+explicitly before native loading.
+The final-source full Go rerun remains 74 passing packages, three previously
+reproduced upstream Windows-permission failures (`manifest`, `compatmigrate`,
+`cmd/launch`) and 31 skipped/no-test packages; no full-suite-green claim.
+
+Archive: `ollama-npu-windows-arm64-0.0.0-npu.dev.c8b363a0acaf.zip`, SHA256
+`cd135f6d7ce2810bb0c131bc5ab519a243cdf7c4f8190be058d59f37e980459b`.
+All 32 extracted inventory entries and clean-source/native build identities pass.
+The CLI's normal `--help` succeeds. However, the normal extracted native
+`lib\ollama\llama-server.exe --version` launch is now denied by fresh Defender
+ASR event `1121`, rule `C1DB55AB-C21A-4637-BB3F-A12568109D35`, at
+`2026-10-15T00:44:19Z` (October 14 EDT). Exact native SHA256:
+`60885a10d787eb38ddc961d52276070765fe9823382d7444617b85efff702953`.
+
+No security setting was changed, no alternative-path launch was attempted, and
+this final archive's consumer/hardware qualification is **not complete**.
+The owner was given the exact normal command and an optional exact-file
+administration action, but was unavailable. Preserve the immutable artifact and
+resume only after a concrete owner decision. Earlier working files/exclusions
+do not qualify this new native file. Its `hardware_qualified=false` build metadata
+remains unchanged; the earlier 100-request result and dirty long-path proof are
+separate evidence, not a substitute.
+
+Owned test servers, model/runtime trial stores and build scratch were stopped or
+removed. The exact blocked extraction/source, approved offline package cache and
+hash-bound evidence are retained. Original model/runtime assets and converter
+changes remain untouched. A real fresh account/clean OS, stock-service
+coexistence, licensed publisher profile, no-alias vendor fixes and authorized
+hosted distribution remain additional release gates.
 
 ## GGUF/Hexagon is a separate route
 
