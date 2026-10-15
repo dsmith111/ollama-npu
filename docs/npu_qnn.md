@@ -503,9 +503,10 @@ The original archive and user assets were not overwritten.
 
 This is process-environment isolation on the same developer Windows account,
 not a clean machine or new account. No stock installation was found; an owned
-port-holder test is not stock-service coexistence. Final clean-package
-qualification, licensed publisher provenance, no-alias Unicode support,
-reboot/longer-workload quality and usability remain open release gates.
+port-holder test is not stock-service coexistence. At that developer checkpoint, clean-package
+qualification remained open; the final artifact retry below supplies local
+package evidence. Licensed publisher provenance, no-alias Unicode support,
+reboot/longer-workload quality and usability remain release gates.
 
 The next clean package, source `78764493`, passed two complete 69-subtest
 hardware runs (50 exact normal prompts each), all ten isolated offline CLI
@@ -525,7 +526,7 @@ exactly `4`; eight live modules were hash-recorded, and file identity confirms
 their alias directory is the verified long runtime. A final clean package of
 this last fix was subsequently built; its execution gate is recorded below.
 
-### Final October 14 artifact and current administration gate
+### Final October 14 artifact and approved qualification
 
 Final clean source: `c8b363a0acaf7601ee9df9f5441d090bb1007ae1`. The path guard
 also includes the longest pinned provider DLL filename, not just the shorter
@@ -538,23 +539,45 @@ reproduced upstream Windows-permission failures (`manifest`, `compatmigrate`,
 Archive: `ollama-npu-windows-arm64-0.0.0-npu.dev.c8b363a0acaf.zip`, SHA256
 `cd135f6d7ce2810bb0c131bc5ab519a243cdf7c4f8190be058d59f37e980459b`.
 All 32 extracted inventory entries and clean-source/native build identities pass.
-The CLI's normal `--help` succeeds. However, the normal extracted native
-`lib\ollama\llama-server.exe --version` launch is now denied by fresh Defender
+The CLI's normal `--help` succeeds. Initially, the normal extracted native
+`lib\ollama\llama-server.exe --version` launch was denied by fresh Defender
 ASR event `1121`, rule `C1DB55AB-C21A-4637-BB3F-A12568109D35`, at
 `2026-10-15T00:44:19Z` (October 14 EDT). Exact native SHA256:
 `60885a10d787eb38ddc961d52276070765fe9823382d7444617b85efff702953`.
 
-No security setting was changed, no alternative-path launch was attempted, and
-this final archive's consumer/hardware qualification is **not complete**.
-The owner was given the exact normal command and an optional exact-file
-administration action, but was unavailable. Preserve the immutable artifact and
-resume only after a concrete owner decision. Earlier working files/exclusions
-do not qualify this new native file. Its `hardware_qualified=false` build metadata
-remains unchanged; the earlier 100-request result and dirty long-path proof are
-separate evidence, not a substitute.
+The owner approved this exact executable at 21:08 EDT. Normal retry of the
+unchanged file then succeeded; no agent security change, rebuild, rename or
+alternate executable path was used. The exact final archive now has its own
+local consumer and hardware evidence:
+
+- All 32 extracted inventory entries, minimal-PATH CLI help and native version
+  pass. The source checkout remained clean at `c8b363a0`.
+- Ten actual offline setup/doctor/recovery outcomes, fresh-directory official
+  online acquisition, abrupt installer termination/same-destination offline retry
+  and owned occupied-port refusal pass.
+- Actual CLI import/run and declared compatibility reporting pass in the new
+  space/non-ASCII environment profile. Its strict LF template was retained.
+- Two full hardware suites each pass 69 subtests, including 50 exact normal
+  prompts: **138 subtests and 100 exact prompts total**, with no failed or skipped
+  cases. Controls, templated completion/stream conversation tokens, chat,
+  disconnect/reload, unload/reload and ordinary CPU GGUF/QNN switching pass.
+- The same packaged executable returns exactly `4` with conversation tokens
+  from independently hashed copies in a 307-character Unicode model store and
+  308-character runtime directory. Both normal and long-path runs record eight
+  live native modules; seven match the approved runtime file hashes and directory
+  identity, with the OEM DSP RPC module recorded separately. This is not a
+  per-node or accelerator-only placement claim.
+
+These are local engineering-fixture results, not licensed publisher certification
+or a clean-machine test. The immutable archive's `hardware_qualified=false`
+build metadata is unchanged; hash-bound post-build qualification evidence is
+separate. Existing penalty-mode quality limitations and native context/shutdown
+warnings remain visible, not waived by short-prompt success. Abrupt termination
+can leave an unpromoted private stage; retry succeeds, but ownership-safe automatic
+orphan cleanup remains a release follow-up.
 
 Owned test servers, model/runtime trial stores and build scratch were stopped or
-removed. The exact blocked extraction/source, approved offline package cache and
+removed. The exact approved extraction/source, approved offline package cache and
 hash-bound evidence are retained. Original model/runtime assets and converter
 changes remain untouched. A real fresh account/clean OS, stock-service
 coexistence, licensed publisher profile, no-alias vendor fixes and authorized
