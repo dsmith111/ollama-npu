@@ -20,15 +20,28 @@ func nativeLibraryPath(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	wide, err := windows.UTF16FromString(absolute)
+	fits, err := libraryPathsFit(absolute)
 	if err != nil {
 		return "", err
 	}
-	if len(wide) <= 260 {
+	if fits {
 		return absolute, nil
 	}
 	// The pinned ORT provider discovery truncates module paths at MAX_PATH.
 	return shortLibraryPath(absolute, windowsShortPath)
+}
+
+func libraryPathsFit(path string) (bool, error) {
+	for _, candidate := range []string{path, filepath.Join(filepath.Dir(path), "onnxruntime_providers_shared.dll")} {
+		wide, err := windows.UTF16FromString(candidate)
+		if err != nil {
+			return false, err
+		}
+		if len(wide) > 260 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func shortLibraryPath(absolute string, lookup func(string) (string, error)) (string, error) {
@@ -40,11 +53,11 @@ func shortLibraryPath(absolute string, lookup func(string) (string, error)) (str
 		return "", pathError(err)
 	}
 	path := filepath.Join(dir, filepath.Base(absolute))
-	wide, err := windows.UTF16FromString(path)
+	fits, err := libraryPathsFit(path)
 	if err != nil {
 		return "", pathError(err)
 	}
-	if len(wide) > 260 {
+	if !fits {
 		return "", pathError(errors.New("verified directory alias is still too long"))
 	}
 	slog.Info("using verified Windows runtime-directory alias", "library", absolute, "native_library", path)
