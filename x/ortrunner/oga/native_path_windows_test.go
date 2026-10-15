@@ -1,6 +1,6 @@
 //go:build windows
 
-package ortrunner
+package oga
 
 import (
 	"os"
@@ -18,7 +18,7 @@ func TestNativeQNNModelDirectoryWindowsAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, err := nativeModelDirectory(dir, "qnn")
+	path, err := NativeModelDirectory(dir, "qnn")
 	if !asciiPath(short) {
 		if path != "" || err == nil || !strings.Contains(err.Error(), "NPU_MODEL_PATH_UNSUPPORTED") {
 			t.Fatalf("missing ASCII alias must fail explicitly: path=%q error=%v", path, err)

@@ -146,6 +146,9 @@ dependencies through developer `PATH`. Default identity:
 `0.0.0-npu.dev.<source-commit>`. `-Version 0.0.0-npu.preview.1` supplies an explicit
 fork identity. Dirty checkouts fail unless `-AllowDirty` is supplied; development
 outputs then receive `.dirty`. Existing package outputs are never overwritten.
+On Windows, the pinned supplier clone enables `core.longpaths` only in that owned
+checkout, so nested builds can fetch its unused UI files. User/system Git settings
+are not changed.
 
 The versioned ZIP contains `ollama.exe`, its peer DLLs, `lib\ollama` native
 payload/notices, setup/development documentation, `build-info.json` and

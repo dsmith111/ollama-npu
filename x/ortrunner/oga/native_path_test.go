@@ -1,4 +1,4 @@
-package ortrunner
+package oga
 
 import (
 	"errors"
@@ -56,13 +56,13 @@ func TestNativeModelDirectoryPreservesOtherPaths(t *testing.T) {
 
 	dir := "model-\u00f6"
 	for _, provider := range []string{"cpu", "dml"} {
-		path, err := nativeModelDirectory(dir, provider)
+		path, err := NativeModelDirectory(dir, provider)
 		if err != nil || path != dir {
 			t.Fatalf("%s path changed: %q, %v", provider, path, err)
 		}
 	}
 	if runtime.GOOS != "windows" {
-		path, err := nativeModelDirectory(dir, "qnn")
+		path, err := NativeModelDirectory(dir, "qnn")
 		if err != nil || path != dir {
 			t.Fatalf("non-Windows path changed: %q, %v", path, err)
 		}

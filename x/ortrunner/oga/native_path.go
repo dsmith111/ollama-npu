@@ -1,4 +1,4 @@
-package ortrunner
+package oga
 
 import (
 	"fmt"
@@ -27,23 +27,31 @@ func qnnModelDirectory(dir string, shortPath func(string) (string, error)) (stri
 	if asciiPath(absolute) {
 		return dir, nil
 	}
-	alias, err := shortPath(absolute)
+	alias, err := directoryAlias(absolute, shortPath)
 	if err != nil {
 		return "", pathError(err)
 	}
+	return alias, nil
+}
+
+func directoryAlias(absolute string, shortPath func(string) (string, error)) (string, error) {
+	alias, err := shortPath(absolute)
+	if err != nil {
+		return "", err
+	}
 	if !filepath.IsAbs(alias) || !asciiPath(alias) {
-		return "", pathError(fmt.Errorf("Windows did not supply an absolute ASCII alias"))
+		return "", fmt.Errorf("Windows did not supply an absolute ASCII alias")
 	}
 	original, err := os.Stat(absolute)
 	if err != nil {
-		return "", pathError(err)
+		return "", err
 	}
 	aliased, err := os.Stat(alias)
 	if err != nil {
-		return "", pathError(err)
+		return "", err
 	}
 	if !original.IsDir() || !aliased.IsDir() || !os.SameFile(original, aliased) {
-		return "", pathError(fmt.Errorf("alias does not identify the original model directory"))
+		return "", fmt.Errorf("alias does not identify the original directory")
 	}
 	return alias, nil
 }

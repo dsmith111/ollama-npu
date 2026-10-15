@@ -62,7 +62,7 @@ func (r *Runner) Load(modelDir string) error {
 			return err
 		}
 	}
-	nativeDir, err := nativeModelDirectory(modelDir, plan.name)
+	nativeDir, err := oga.NativeModelDirectory(modelDir, plan.name)
 	if err != nil {
 		return err
 	}

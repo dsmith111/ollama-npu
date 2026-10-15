@@ -27,6 +27,11 @@ server.
   rewrite the bundle or change filesystem settings. Without a usable alias it
   rejects the load before native initialization; this is not universal Unicode
   filename support.
+- Long runtime paths also encounter the pinned ORT provider-discovery
+  `MAX_PATH` limit. The same directory-identity checks select a Windows ASCII
+  alias for native loading, without changing the installation or verified bytes.
+  If none fits, `NPU_RUNTIME_PATH_UNSUPPORTED` requests the default setup location
+  or a separately qualified runtime; do not change filesystem policy.
 
 Hardware detection and DLL loading are prerequisites, not proof that an
 inference request ran on the NPU. Likewise, a CPU/GPU completion is not QNN
@@ -301,6 +306,7 @@ hosted `ollama pull` goal. No model/vendor material was uploaded in this work.
 | Declared model rejects a legacy runtime or QNN override | Select a fresh setup-verified directory and remove backend/SoC/HTP overrides |
 | `NPU_PROFILE_LOAD_FAILED` | A declaration is not hardware proof; preserve config/runtime and check the publisher's target and OEM driver |
 | `NPU_MODEL_PATH_UNSUPPORTED` | Windows supplied no usable ASCII alias for the QNN model directory; select an ASCII `OLLAMA_MODELS` directory or a separately qualified Unicode-capable runtime, without changing filesystem policy |
+| `NPU_RUNTIME_PATH_UNSUPPORTED` | The pinned runtime cannot discover providers beyond `MAX_PATH` and no safe short alias fits; use the default setup location or a separately qualified runtime |
 | Requested setting is rejected | Use the supported option set; do not assume all llama.cpp options apply |
 | Prompt exceeds context | Use the bundle's qualified context, not a larger guessed `num_ctx` |
 | Chat exposes role tokens or produces poor output | Verify tokenizer, template and source/quantization quality |
@@ -500,6 +506,24 @@ not a clean machine or new account. No stock installation was found; an owned
 port-holder test is not stock-service coexistence. Final clean-package
 qualification, licensed publisher provenance, no-alias Unicode support,
 reboot/longer-workload quality and usability remain open release gates.
+
+The next clean package, source `78764493`, passed two complete 69-subtest
+hardware runs (50 exact normal prompts each), all ten isolated offline CLI
+checks, actual CLI import/run, fresh online setup, abrupt-install retry and
+owned-port refusal. Its archive SHA256 is
+`d85a5d4f79b57b6eff7546ecca9c7f68796a6655adddcce8c459e91efbe3872d`.
+This immutable local artifact predates the following long-runtime fix.
+
+The 307-character model store worked through its verified alias, but a
+308-character runtime directory exposed two limits: direct loading returned
+Windows error 206, and extended-length spelling alone then exposed ORT's
+truncated provider-discovery path. Do not treat a standalone DLL fixture that
+loads as proof that the actual pinned runtime works. Sharing the validated
+directory-alias helper between model and runtime loading fixes actual templated
+inference on those unchanged paths. The separately identified dirty CLI returned
+exactly `4`; eight live modules were hash-recorded, and file identity confirms
+their alias directory is the verified long runtime. A final clean package of
+this last fix is still required.
 
 ## GGUF/Hexagon is a separate route
 

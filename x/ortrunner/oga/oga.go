@@ -81,7 +81,12 @@ func tryLoadFromDir(dir string) bool {
 }
 
 func tryLoadLibrary(path string) bool {
-	cPath := C.CString(path)
+	nativePath, err := nativeLibraryPath(path)
+	if err != nil {
+		initLoadError = fmt.Sprintf("invalid ORT GenAI dynamic library path: %v", err)
+		return false
+	}
+	cPath := C.CString(nativePath)
 	defer C.free(unsafe.Pointer(cPath))
 	var handle C.oga_dynamic_handle
 	if C.oga_dynamic_load(&handle, cPath) != 0 {

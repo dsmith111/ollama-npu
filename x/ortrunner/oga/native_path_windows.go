@@ -1,6 +1,6 @@
 //go:build windows
 
-package ortrunner
+package oga
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func nativeModelDirectory(dir, provider string) (string, error) {
+func NativeModelDirectory(dir, provider string) (string, error) {
 	if provider != "qnn" {
 		return dir, nil
 	}
