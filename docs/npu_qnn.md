@@ -663,6 +663,39 @@ archive and its original negative evidence are retained. Long-context quality,
 licensed producer/provenance, clean-host/stock coexistence, sustained/reboot/
 usability and authorized hosted distribution gates remain open.
 
+### Clean portable recovery package
+
+The queue fix was subsequently rebuilt from clean source
+`abc185a2a054f5ace160cd711e60affaecdeacef` with fresh native compilation.
+The local unsigned archive is
+`ollama-npu-windows-arm64-0.0.0-npu.dev.abc185a2a054.zip`, SHA256
+`7ff909d4915d37b12ad00d5338a99e27aca56cf0616b19381c38e92621632593`.
+CLI SHA256:
+`0bc7256e6234003a19c6ca6569908fa941906b23667ca88b63462c221ae1a80f`;
+native `llama-server.exe`:
+`4fb5f72402153a1430a5ceaaa7d8c02db71075471c852f972d2bd35a2cb5386a`.
+
+This exact extraction passed all 32 inventory hashes/import checks and normal
+minimal-PATH CLI/native startup, without a new policy exception. Two full
+69-subtest suites/100 exact short prompts include CPU/NPU switching. Ten offline
+setup/recovery checks and actual reviewed converter installation preserve all
+21 named assets. Its own ten disconnect rounds preserve 30 queued normal results
+and ten deadlines expire; three child kills preserve nine queued raw results,
+with active errors and no terminal success. These are not inherited developer-
+binary results or automatic retries of started prompts.
+
+Independently hashed 313-character Unicode model and 314-character runtime paths
+return exact `4` with conversation tokens. Normal/long native captures each match
+seven official runtime hashes/directory identities plus separate OEM DSP RPC.
+Owned processes/profile copies are cleaned; original assets/archives and negative
+quality evidence remain intact. Build-time `hardware_qualified=false` is immutable;
+qualification is recorded separately, not retroactively written into the archive.
+
+This is local exact-package evidence, not a public release, clean Windows account/
+OS, actual stock-service coexistence, licensed supplier profile or long-context/
+reboot/sustained-resource/usability certification. The older `c8b363a0` archive
+still predates the queue fix. No runtime/model binary was published.
+
 ## GGUF/Hexagon is a separate route
 
 Current upstream llama.cpp has a Snapdragon Hexagon backend that can execute
