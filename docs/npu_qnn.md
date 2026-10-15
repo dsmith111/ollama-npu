@@ -115,6 +115,60 @@ compiled context graphs. The actual config references determine the required
 assets; a nonzero `.bin` beside an invalid ONNX wrapper is not a usable model.
 Compiled target assets must be validated on compatible hardware.
 
+### Older QNN contexts: load errors followed by teardown errors
+
+With the pinned GenAI 0.12.2 / ORT 1.24.1 runtime, an older compiled context can
+print `CFBWithCallback requires a context binary of version 3.3.3 or newer`,
+`0x1392`, and later `QNN_DEVICE_ERROR_ASSOCIATED_TO_CONTEXT` / backend shutdown
+errors, even when generation succeeds. **3.3.3 is a context-blob version**, not
+the required ORT or QNN SDK version.
+
+ORT first tries an optional file-mapped-weights loading path, then retries
+ordinary **QNN** loading on failure. Microsoft's
+[upstream fix](https://github.com/microsoft/onnxruntime/pull/27871) documents that
+attempting this optimization on older blobs can prevent complete native cleanup.
+Successful output alone does not establish that the teardown errors are harmless.
+
+The existing runtime supports a configuration workaround: in an independently
+copied bundle, add this string-valued QNN provider option:
+
+```json
+"disable_file_mapped_weights": "1"
+```
+
+Set it in **every QNN session**, preserving its other options. For a pipeline,
+this means each QNN stage's
+`session_options.provider_options[].qnn` object, including both `context_ctx` and
+`iterator_ctx` in the retained Phi-3 fixture. Setting only the primary decoder's
+provider option does not update explicitly configured pipeline sessions. See the
+[pinned provider implementation](https://github.com/microsoft/onnxruntime/blob/v1.24.1/onnxruntime/core/providers/qnn/qnn_execution_provider.cc#L480-L535).
+
+Import the corrected bundle under a **new tag**, with the model's correct
+template. Do not edit content-addressed blobs, a materialized runtime cache or
+the original model in place. Recompute the derived artifact's actual inventory;
+retained producer metadata is historical, not a signature of the changed bundle.
+This option disables a loading optimization, not QNN/HTP execution. It does not
+require a DLL upgrade, a rebuilt context, log filtering or disabling unload.
+Memory/performance implications still need qualification for other models.
+
+October 15 local verification used the unchanged `abc185a2` portable package:
+three direct native load/generate/destroy cycles previously produced twelve
+callback failures and three teardown failures; changing only the two stage
+options eliminated both classes across three further cycles. The imported
+variant then passed all 69 hardware subtests/50 exact normal prompts, CPU/NPU
+switching, ten disconnect rounds/30 queued exact answers and ten queued deadlines.
+Live capture matched seven official ORT/QNN module pins plus separate OEM DSP RPC;
+explicit unload left no owned ORT child. Target native errors stayed absent.
+This is local evidence for this tuple, not long-context or release certification.
+
+`DSP_INFO UNSUPPORTED_KEY: 49/50` remains visible. A
+[Qualcomm maintainer response](https://github.com/qualcomm/GenieX/issues/1154#issuecomment-4919506377)
+identifies this logging in GenieX as NPU-driver-related; the numeric meanings and
+a supported key-specific fix are not established for this runtime. Do not hide
+these messages or replace the OEM driver speculatively. The missing compatibility
+profile warning also remains truthful for a legacy bundle; do not invent a
+publisher declaration merely to remove it.
+
 ### Versioned compatibility declaration
 
 New publishers can include an optional named artifact, **`ollama_npu.json`**,
@@ -439,6 +493,8 @@ Native logs and a live owned-child module inventory confirm loaded verified ORT/
 This is not per-node profiling, accelerator-only placement or energy evidence.
 Native context-load (`0x1392`) and shutdown warnings also occur in the earlier
 successful baseline; they are preserved, not silently classified as harmless.
+The later [older-context workaround](#older-qnn-contexts-load-errors-followed-by-teardown-errors)
+is separately tested on a derived bundle; it does not change this historical run.
 All 32 extracted inventory entries and the original archive remain unchanged.
 
 This closes F0's local packaged execution check, **not F1 or a consumer release**.
