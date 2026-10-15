@@ -21,6 +21,9 @@ server.
   make it NPU-compatible.
 - Text inference is the initial scope. Tool use, structured output, vision and
   embeddings must not be assumed supported merely because a model imports.
+- The retained Phi-3 fixture is locally checked with short prompts at `num_ctx=512`,
+  not certified for useful 4,096-token conversations or multi-client agents.
+  A declared/configured context limit is capacity metadata, not a quality result.
 - The pinned Windows QNN file mapper mishandles non-ASCII directory names.
   The fork uses a Windows-provided ASCII short-path alias only after verifying
   that it identifies the same model directory. It does not move model files,
@@ -229,6 +232,10 @@ one-resident-model limit; ordinary GGUF keeps its upstream automatic policy.
 An explicit `OLLAMA_MAX_LOADED_MODELS` overrides that conservative limit.
 Cancellation retires the child when needed, so the next request may require a
 cold reload.
+Already assigned requests queued on that child can receive an explicit HTTP 500
+when another client's cancellation retires it. The server does not silently
+replay their prompts. Fresh requests recover through a new child; transparent
+multi-client recovery is not qualified.
 
 ## Publishing and pulling
 
@@ -578,10 +585,42 @@ orphan cleanup remains a release follow-up.
 
 Owned test servers, model/runtime trial stores and build scratch were stopped or
 removed. The exact approved extraction/source, approved offline package cache and
-hash-bound evidence are retained. Original model/runtime assets and converter
-changes remain untouched. A real fresh account/clean OS, stock-service
+hash-bound evidence are retained. Original model/runtime assets and pre-existing
+converter work are preserved. Subsequent converter C0 source hardening does not
+alter this package or certify a model-production recipe. A real fresh account/clean OS, stock-service
 coexistence, licensed publisher profile, no-alias vendor fixes and authorized
 hosted distribution remain additional release gates.
+
+### Extended local resilience and quality check
+
+Following the final-package approval, the same unchanged `c8b363a0` archive
+passed another **300 exact short prompts** in an independently copied isolated
+profile. Resource samples after warm-up and at 50-request intervals recorded
+parent/child private memory, working set, handles and threads. From request 20
+to 300, parent private memory decreased by about 4.5 MiB and child private memory
+by about 1 MiB; handles changed by +8 and +12 respectively. This short observation
+is not a long-run leak certificate, an accelerator-memory measurement or a
+performance/energy comparison.
+
+- Ten active-stream disconnect rounds produced explicit failures for 30 requests
+  already queued on the retired child. The stronger expectation that all queued
+  requests survive was **not met**; its initial failure is retained separately.
+  A fresh deterministic request after every round returned the correct answer.
+- Three deliberate terminations of the exact owned runner PID produced stream
+  errors, not terminal success. Each following request loaded a new child PID and
+  returned exactly `4`. Final unload left no owned child resident.
+- A measured **3,525-token** repeated-word prompt at `num_ctx=4096` returned
+  nonsensical text instead of `4` in two identical runs. A following short request
+  at 512 returned exactly `4`. The bundle's nominal 4,096-token declaration must
+  not be promoted into useful-context or broader quality certification.
+
+The stronger resilience/quality run is therefore **not an all-pass F3 result**.
+Licensed producer/reference-quality investigation, a safe multi-client recovery
+contract, longer sustained/resource tests, controlled reboot and usability remain
+open. No original artifact, configuration, runtime or security setting was
+changed to conceal these results. Owned trials/processes were removed; original
+model/runtime hashes, all five retained archives and prior qualification evidence
+were reverified unchanged.
 
 ## GGUF/Hexagon is a separate route
 
