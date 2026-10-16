@@ -151,6 +151,43 @@ license text/notices and the exact local changes. Do not apply the Apache label
 to proprietary runtime DLLs. The separately tested file-mapping workaround below
 changes only two config options relative to this traced local bundle.
 
+### Pinned prebuilt preparation without manual JSON edits
+
+The converter now has an explicit local engineering workflow:
+`acquire-prebuilt` -> `prepare-prebuilt --profile phi3-mini-4k-qnn` ->
+`import-ollama`. See the
+[converter consumer instructions](https://github.com/dsmith111/ollama-npu-model-converter#prepared-phi-3-mini-4k-engineering-profile)
+when that source checkpoint is available; until then these converter changes
+remain local to the workspace, not a published package promise.
+
+The profile accepts only the complete 23-file
+`llmware/phi-3-mini-4k-instruct-onnx-qnn` revision
+`6fa72cea4103de0bc69792a6655be538a8c4d7e0`. Acquisition preserves raw upstream
+bytes, including inert Python source, without executing it. Preparation creates
+a separate 30-file derivative with both QNN file-mapping options, a supported
+changed-file notice in decoder `log_id`, original config, source/card/copyright
+attribution, complete license texts, LF Phi template and explicit runtime/target
+declaration. The source and original tags are not rewritten. Each phase is
+plan-first, requiring an explicitly reviewed fingerprint for execution.
+
+October 16 local proof used an independently installed converter wheel and the
+unchanged qualified `abc185a2` portable fork package: real public acquisition,
+initially empty store import, all 30 named hashes, attached notices/license,
+69 hardware subtests / 50 exact raw prompts, templated generation/chat,
+unload/reload, CPU/NPU switching and ten disconnect / 30 queued-answer / ten
+deadline cases passed. Seven official live native pins and clean unload were
+verified. No callback/teardown or ORT native errors appeared; DSP keys 49/50 remain.
+
+Source fingerprint:
+`6fa2fa387024705b616ac12f9468e6671502e24468420eaa3095d3c617cac653`.
+Two independent profile assemblies produced the same derivative fingerprint:
+`b274a6b3443ac58cfe70405c6e5b3c595a981a5b665b95ffb937834c53aabf6d`.
+The profile is limited to the exact X1E78100 Windows ARM64 target, GenAI QNN
+0.12.2 / ORT QNN 1.24.1 and a **512-token default**. Declared 4096 is capacity,
+not useful-context approval. The declaration is by the derivative packager, not
+vendor certification. This is not a producer rebuild, public model upload,
+hosted blob pull/run, clean-machine or agent/tool-use qualification.
+
 ### Older QNN contexts: load errors followed by teardown errors
 
 With the pinned GenAI 0.12.2 / ORT 1.24.1 runtime, an older compiled context can
