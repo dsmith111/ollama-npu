@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/ollama/ollama/discover/dxcore"
 	ortruntime "github.com/ollama/ollama/x/ortrunner/runtime"
@@ -13,6 +14,9 @@ import (
 )
 
 func NPUSetupHandler(cmd *cobra.Command, args []string) error {
+	if strings.EqualFold(diagnosticString(cmd, "provider"), "hexagon") {
+		return hexagonSetupHandler(cmd, args)
+	}
 	report := newNPUDiagnostic("npu setup")
 	dir := diagnosticString(cmd, "dir")
 	if dir == "" {

@@ -19,6 +19,7 @@ import (
 	"github.com/ollama/ollama/llm"
 	"github.com/ollama/ollama/logutil"
 	"github.com/ollama/ollama/ml"
+	"github.com/ollama/ollama/x/hexagon"
 )
 
 var (
@@ -110,6 +111,11 @@ func GPUDevices(ctx context.Context, runners []ml.FilteredRunnerDiscovery) []ml.
 				} else if !envconfig.EnableHexagon() && strings.Contains(filepath.Base(dir), "hexagon") {
 					slog.Info("experimental Hexagon NPU support disabled.  To enable, set OLLAMA_HEXAGON=1")
 					continue
+				} else if strings.Contains(filepath.Base(dir), "hexagon") {
+					if _, err := hexagon.VerifiedDir(hexagon.SearchDirs(dir)); err != nil {
+						slog.Warn("Hexagon NPU libraries unavailable", "error", err)
+						continue
+					}
 				}
 				dirs = []string{ml.LibOllamaPath, dir}
 			} else {

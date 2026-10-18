@@ -7,18 +7,28 @@ open.
 
 ## Enabling it
 
-Start the server with `OLLAMA_HEXAGON=1`. Upstream first shipped Vulkan the same way, as
-an opt-in setting (#12931):
+Get Qualcomm's signed NPU libraries once, then start the server with `OLLAMA_HEXAGON=1`.
+Upstream first shipped Vulkan the same way, as an opt-in setting (#12931):
 
 ```bat
+ollama npu setup --provider hexagon --accept-qualcomm-terms
 set OLLAMA_HEXAGON=1
 ollama serve
 ```
 
-Without it, discovery skips `lib\ollama\hexagon` and logs `experimental Hexagon NPU support
-disabled`, so GGUF models run on the CPU. With it, discovery reports `library=Hexagon
-name=HTP0`, and GGUF models load onto the NPU by default; `num_gpu 0` keeps a model on
-the CPU.
+Setup downloads Qualcomm's GenieX v0.9.1 Windows SDK archive (87 MB) from GitHub, checks
+it and the six files it needs against pinned hashes (`x/hexagon`), and installs them with
+GenieX's licence into `%LOCALAPPDATA%\Ollama\runtimes\hexagon-htp\win-arm64\b11644`. It
+never replaces an existing directory. Without `--accept-qualcomm-terms` it only shows the
+terms (see "Redistribution"). `--dir` installs elsewhere (then select that directory with
+`OLLAMA_HEXAGON_PATH`), `--package-dir` uses an archive downloaded beforehand, and
+`--validate-only` checks the directory runners would use.
+
+Without `OLLAMA_HEXAGON`, discovery skips `lib\ollama\hexagon` and logs `experimental
+Hexagon NPU support disabled`, so GGUF models run on the CPU. With it, discovery reports
+`library=Hexagon name=HTP0`, and GGUF models load onto the NPU by default; `num_gpu 0`
+keeps a model on the CPU. If no verified set is found, discovery logs `Hexagon NPU
+libraries unavailable` with the setup command and offers only the other devices.
 
 ## Why b11644 and signed libraries
 
@@ -33,18 +43,15 @@ source at that commit.
 ## Build
 
 Prerequisites: Visual Studio 2026 with the ARM64 C++ tools and its clang (VC\Tools\Llvm),
-CMake and Ninja (both ship with Visual Studio), the trimmed Hexagon SDK 6.6
+CMake and Ninja (both ship with Visual Studio), and the trimmed Hexagon SDK 6.6
 (`hexagon-sdk-v6.6.0.0-arm64-wos.tar.xz` from the snapdragon-toolchain GitHub releases;
-check its SHA256 against the release), and the signed HTP libraries from the GenieX v0.9.1
-Windows ARM64 archive (`lib\llama_cpp\libggml-htp-v*.so`, `libggml-htp.cat`,
-`libggml-htp.inf`; hashes below).
+check its SHA256 against the release).
 
 From an ARM64 Visual Studio environment (`vcvarsarm64.bat`) with clang first on PATH:
 
 ```bat
 set HEXAGON_SDK_ROOT=C:\path\to\Hexagon_SDK\6.6.0.0
 set HEXAGON_TOOLS_ROOT=%HEXAGON_SDK_ROOT%\tools\HEXAGON_Tools\19.0.07
-set OLLAMA_HEXAGON_HTP_DIR=C:\path\to\geniex\lib\llama_cpp
 cmake -S llama\server --preset cpu_arm64_clang -B build\cpu
 cmake --build build\cpu --target llama-server llama-quantize llama-perplexity
 cmake --install build\cpu --prefix dist --component llama-server
@@ -56,14 +63,18 @@ go build -o dist\ollama.exe .
 
 Both presets use clang targeting the MSVC ABI, which the Hexagon host code and the SDK's
 generated stubs need; the packaging script's `cpu_arm64` preset (LLVM-MinGW) is not used
-here. The hexagon preset installs `ggml-hexagon.dll`, the signed libraries and GenieX's
-licence (`GenieX-LICENSE.txt`) into `lib\ollama\hexagon`; configure fails if any signed
-file is missing.
+here. The hexagon preset installs `ggml-hexagon.dll` into `lib\ollama\hexagon`. For a local
+build you may also bundle the signed set there: set `OLLAMA_HEXAGON_HTP_DIR` to the GenieX
+archive's `lib\llama_cpp` folder, and the preset installs the six files and GenieX's
+licence (configure fails if a file is missing). Packages leave the set out.
 
 ## What the runner does
 
 With `OLLAMA_HEXAGON=1`, discovery treats `lib\ollama\hexagon` like any GPU backend
-directory. When a runner directory contains `libggml-htp-v*.so`, the runner also sets:
+directory. It looks for the signed set in `OLLAMA_HEXAGON_PATH`, then `lib\ollama\hexagon`
+(a local build that bundles it), then the setup directory. The first directory holding a
+`libggml-htp.cat` must match the pinned hashes; a set that doesn't is refused, with no
+fallback to a later directory. The runner then sets:
 
 - `ADSP_LIBRARY_PATH` to that directory, so FastRPC finds the NPU libraries;
 - `GGML_HEXAGON_MBUF=,,3000M` unless set: the backend otherwise reports 0 MiB, and
@@ -90,6 +101,12 @@ The opt-in, checked on the same model: with `OLLAMA_HEXAGON=1` all 29 layers loa
 HTP0 (898 MiB; `/api/ps` reported `size_vram` equal to `size`). Without it, discovery
 offered only the CPU, and the same greedy prompt gave the same text there.
 
+Setup, checked with a payload that leaves the set out: `ollama npu setup --provider hexagon
+--accept-qualcomm-terms --dir ...` downloaded and verified the archive in 5 seconds, and the
+installed catalog still validates as Microsoft-signed. Selected with
+`OLLAMA_HEXAGON_PATH`, the set put all 29 layers on HTP0 again; with no set reachable,
+discovery logged the setup hint and the model ran on the CPU.
+
 ## Redistribution
 
 - The signed set is a Qualcomm release asset: GenieX v0.9.1 on GitHub
@@ -99,8 +116,8 @@ offered only the CPU, and the same greedy prompt gave the same text there.
   the catalog.
 - BSD-3-Clause allows redistribution in binary form when the copyright notice, the
   conditions and the disclaimer go with it, and Qualcomm's name is not used to endorse the
-  product. The release archives omit the licence file, so the hexagon preset installs the
-  v0.9.1 `LICENSE`, verbatim, as `GenieX-LICENSE.txt`.
+  product. The release archives omit the licence file, so setup (and a local build that
+  bundles the set) writes the v0.9.1 `LICENSE`, verbatim, as `GenieX-LICENSE.txt`.
 - GenieX's README adds: "Use of this project is also subject to Qualcomm's Terms of Use".
   Those terms (revised May 19, 2026) leave the BSD-3 grant standing: their limits on
   downloaded content (one device, personal and non-commercial use) give way where
@@ -123,8 +140,8 @@ offered only the CPU, and the same greedy prompt gave the same text there.
   - **No patent licence**, express or implied (section 7.5); BSD-3 has no patent grant
     either.
   - **No suggested association** with Qualcomm products or trademarks (section 7.4).
-- The signature covers these exact bytes, so ship them unmodified. Another llama.cpp
-  commit needs a signed set built from that commit.
+- The signature covers these exact bytes, which setup and runners check. Another
+  llama.cpp commit needs a signed set built from that commit.
 - `ggml-hexagon.dll` is built from llama.cpp sources. Its Hexagon SDK content is the
   FastRPC stub that `qaic` generates from llama.cpp's `htp_iface.idl`, plus the SDK headers
   the stub includes: `rpcmem.h` and `AEEStdErr.h` are BSD-3-Clause, and `remote.h` is
@@ -133,12 +150,12 @@ offered only the CPU, and the same greedy prompt gave the same text there.
   llama.cpp publishes binaries built this way (`bin-android-arm64-snapdragon`,
   `bin-linux-arm64-snapdragon`), though none for Windows.
 
-So bundling the signed set would carry Qualcomm's use restrictions into every fork
-package. The fork already keeps Qualcomm's QNN runtime out of its package: `ollama npu setup
---provider qnn` downloads pinned, hash-checked NuGet packages into a fresh directory, which
-the user selects with `OLLAMA_ORT_PATH`. Fetching the GenieX archive below the same way, at
-setup time and checked against these hashes, keeps the fork package under its own licence;
-each user then gets Qualcomm's files from Qualcomm, under Qualcomm's terms.
+Bundling the signed set would carry Qualcomm's use restrictions into every fork package,
+so packages leave it out, as they leave out Qualcomm's QNN runtime (`ollama npu setup
+--provider qnn`). `ollama npu setup --provider hexagon` fetches the GenieX archive below at
+setup time, checks it against these hashes, and shows Qualcomm's terms before downloading.
+The fork package stays under its own licence, and each user gets Qualcomm's files from
+Qualcomm, under Qualcomm's terms.
 
 The files, identical in `geniex-sdk-windows-arm64-v0.9.1.zip` (SHA256 `2ed2bf63f042086c525b442081ed8d7ad4ff76bcce8bad6eeabe1cf38cc0a1b5`)
 and `geniex-bench-windows-arm64-v0.9.1.zip` (SHA256 `e465931fbf4ccfbd011632fb1b6e337362963d7550c24d6a808d99504565acdb`),
@@ -157,6 +174,5 @@ under `lib\llama_cpp`:
 
 - Packaging with the clang/MSVC-ABI build, and a memory budget per HTP version (3000 MiB
   is v73's).
-- Fetching the signed set at setup time instead of bundling it (see above); the preset
-  still installs it for local builds.
-- Moving llama.cpp past b11644 waits for a signed HTP set built from the new commit.
+- Moving llama.cpp past b11644 waits for a signed HTP set built from the new commit; the
+  `x/hexagon` test fails until `Pinned` names one.

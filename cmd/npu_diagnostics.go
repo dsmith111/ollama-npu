@@ -10,19 +10,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ollama/ollama/x/hexagon"
 	ortruntime "github.com/ollama/ollama/x/ortrunner/runtime"
 	"github.com/spf13/cobra"
 )
 
 // ConfigureNPUSetupCommand is kept separate from root command construction.
 func ConfigureNPUSetupCommand(cmd *cobra.Command) {
-	cmd.Short = "Acquire or verify the pinned Windows ARM64 QNN runtime files"
+	cmd.Short = "Acquire or verify the pinned Windows ARM64 QNN runtime or Hexagon NPU library files"
 	addDiagnosticFlags(cmd)
 	flags := cmd.Flags()
 	if flags.Lookup("provider") == nil {
 		flags.String("provider", "auto", "Pinned bundle provider: auto or qnn")
 	}
-	flags.Lookup("provider").Usage = "Pinned bundle provider: auto or qnn"
+	flags.Lookup("provider").Usage = "Pinned bundle provider: auto or qnn (ORT runtime), or hexagon (signed NPU libraries for GGUF models)"
+	if flags.Lookup("accept-qualcomm-terms") == nil {
+		flags.Bool("accept-qualcomm-terms", false, "With --provider hexagon: accept the Qualcomm terms that come with the signed libraries")
+	}
 	if flags.Lookup("force") == nil {
 		flags.Bool("force", false, "Revalidate an immutable installation; never overwrite existing files")
 	}
@@ -207,6 +211,7 @@ type npuDiagnostic struct {
 	Hardware          *npuHardware                 `json:"hardware,omitempty"`
 	Runtime           *ortruntime.ValidationReport `json:"runtime,omitempty"`
 	Installation      *ortruntime.InstallResult    `json:"installation,omitempty"`
+	Hexagon           *hexagon.InstallResult       `json:"hexagon,omitempty"`
 	Configuration     map[string]string            `json:"configuration,omitempty"`
 	Error             *npuDiagnosticError          `json:"error,omitempty"`
 }

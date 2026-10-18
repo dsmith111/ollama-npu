@@ -600,15 +600,16 @@ if(OLLAMA_RUNNER_DIR)
         endif()
     endif()
     if(GGML_HEXAGON)
-        # The HTP ops libraries run on the NPU, and Windows loads them only when
-        # a trusted catalog signs them. Self-built ones need test-signing, so
-        # install signed libraries built from this same llama.cpp commit (for
-        # example a Microsoft-signed set published for it) instead. FastRPC
-        # finds them through ADSP_LIBRARY_PATH, which the runner points here.
-        # The signed set for b11644 comes from Qualcomm's GenieX v0.9.1 release
-        # (BSD-3-Clause), whose archives omit the licence; ship it alongside.
         set(OLLAMA_HEXAGON_HTP_DIR "" CACHE PATH
-            "Directory with signed libggml-htp-v*.so libraries and their libggml-htp.cat")
+            "Optional: a signed libggml-htp-v*.so set to bundle with a local build")
+    endif()
+    if(GGML_HEXAGON AND OLLAMA_HEXAGON_HTP_DIR)
+        # The HTP ops libraries run on the NPU, and Windows loads them only when
+        # a trusted catalog signs them; they must also come from this llama.cpp
+        # commit. The signed set for b11644 is Qualcomm's (GenieX v0.9.1), whose
+        # terms attach use restrictions, so packages leave it out and `ollama npu
+        # setup --provider hexagon` downloads it (x/hexagon pins it). Local builds
+        # may bundle a copy here, with GenieX's licence that the archives omit.
         set(_htp_files)
         foreach(_htp_name IN ITEMS
                 libggml-htp-v73.so libggml-htp-v75.so libggml-htp-v79.so libggml-htp-v81.so
@@ -620,7 +621,7 @@ if(OLLAMA_RUNNER_DIR)
             endif()
             list(APPEND _htp_files "${OLLAMA_HEXAGON_HTP_DIR}/${_htp_name}")
         endforeach()
-        install(FILES ${_htp_files} "${CMAKE_CURRENT_SOURCE_DIR}/hexagon/GenieX-LICENSE.txt"
+        install(FILES ${_htp_files} "${CMAKE_CURRENT_SOURCE_DIR}/../../x/hexagon/GenieX-LICENSE.txt"
             DESTINATION "${_base_dest}/${OLLAMA_RUNNER_DIR}"
             COMPONENT llama-server)
     endif()

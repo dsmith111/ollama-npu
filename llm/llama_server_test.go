@@ -3,7 +3,9 @@ package llm
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +27,7 @@ import (
 	"github.com/ollama/ollama/fs/gguf"
 	gguftest "github.com/ollama/ollama/internal/testutil/gguf"
 	"github.com/ollama/ollama/ml"
+	"github.com/ollama/ollama/x/hexagon"
 
 	"github.com/ollama/ollama/api"
 	"golang.org/x/sync/semaphore"
@@ -1373,12 +1376,26 @@ func TestSetupLlamaServerCommandEnvHexagon(t *testing.T) {
 		t.Fatal(err)
 	}
 	plainDir := t.TempDir()
-	hexDir := t.TempDir()
-	for _, name := range []string{"ggml-hexagon.dll", "libggml-htp-v73.so", "libggml-htp.cat"} {
-		if err := os.WriteFile(filepath.Join(hexDir, name), nil, 0o644); err != nil {
+	hexDir := t.TempDir() // the backend; packages leave the signed HTP set out of it
+	if err := os.WriteFile(filepath.Join(hexDir, "ggml-hexagon.dll"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A signed set elsewhere, pinned for this test.
+	htpDir := t.TempDir()
+	pinned := hexagon.Release{Files: map[string]string{}}
+	for _, name := range []string{"libggml-htp-v73.so", "libggml-htp.cat"} {
+		content := []byte(name)
+		if err := os.WriteFile(filepath.Join(htpDir, name), content, 0o644); err != nil {
 			t.Fatal(err)
 		}
+		sum := sha256.Sum256(content)
+		pinned.Files[name] = hex.EncodeToString(sum[:])
 	}
+	original := hexagon.Pinned
+	hexagon.Pinned = pinned
+	t.Cleanup(func() { hexagon.Pinned = original })
+	t.Setenv("LOCALAPPDATA", t.TempDir()) // no set from `ollama npu setup`
+	t.Setenv(hexagon.PathEnv, "")
 
 	adspEnv := func(gpuLibs ...string) (string, bool) {
 		cmd := exec.Command("echo")
@@ -1394,15 +1411,31 @@ func TestSetupLlamaServerCommandEnvHexagon(t *testing.T) {
 	t.Setenv(adspLibraryPathEnv, "")
 	os.Unsetenv(adspLibraryPathEnv)
 	if got, ok := adspEnv(ml.LibOllamaPath, plainDir); ok {
-		t.Fatalf("%s = %q for a runner without HTP libraries, want unset", adspLibraryPathEnv, got)
+		t.Fatalf("%s = %q for a runner without the Hexagon backend, want unset", adspLibraryPathEnv, got)
 	}
-	if got, _ := adspEnv(ml.LibOllamaPath, hexDir); got != hexDir {
-		t.Fatalf("%s = %q, want %q", adspLibraryPathEnv, got, hexDir)
+	if got, ok := adspEnv(ml.LibOllamaPath, hexDir); ok {
+		t.Fatalf("%s = %q with no signed set installed, want unset", adspLibraryPathEnv, got)
+	}
+	t.Setenv(hexagon.PathEnv, htpDir)
+	if got, _ := adspEnv(ml.LibOllamaPath, hexDir); got != htpDir {
+		t.Fatalf("%s = %q, want the selected set %q", adspLibraryPathEnv, got, htpDir)
 	}
 
 	t.Setenv(adspLibraryPathEnv, "C:\\user\\dsp")
-	if got, _ := adspEnv(ml.LibOllamaPath, hexDir); got != hexDir+";C:\\user\\dsp" {
-		t.Fatalf("%s = %q, want the runner directory ahead of the user's path", adspLibraryPathEnv, got)
+	if got, _ := adspEnv(ml.LibOllamaPath, hexDir); got != htpDir+";C:\\user\\dsp" {
+		t.Fatalf("%s = %q, want the signed set ahead of the user's path", adspLibraryPathEnv, got)
+	}
+	os.Unsetenv(adspLibraryPathEnv)
+
+	// A changed file is refused rather than loaded.
+	if err := os.WriteFile(filepath.Join(htpDir, "libggml-htp-v73.so"), []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := adspEnv(ml.LibOllamaPath, hexDir); ok {
+		t.Fatalf("%s = %q for a set that fails its pin, want unset", adspLibraryPathEnv, got)
+	}
+	if err := os.WriteFile(filepath.Join(htpDir, "libggml-htp-v73.so"), []byte("libggml-htp-v73.so"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	memory := func() string {

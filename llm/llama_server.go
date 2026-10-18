@@ -49,6 +49,7 @@ import (
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/fs/gguf"
 	"github.com/ollama/ollama/ml"
+	"github.com/ollama/ollama/x/hexagon"
 )
 
 var grammarJSON = `
@@ -535,12 +536,16 @@ func llamaServerLibraryPaths(exe string, gpuLibs []string, envUpdates map[string
 				envUpdates["GGML_BACKEND_PATH"] = backend
 			}
 		}
-		if hasHexagonHTPLibraries(dir) {
-			if envUpdates[adspLibraryPathEnv] == "" {
-				envUpdates[adspLibraryPathEnv] = adspLibraryPath(dir)
-			}
-			if _, set := os.LookupEnv(hexagonMemoryEnv); !set && envUpdates[hexagonMemoryEnv] == "" {
-				envUpdates[hexagonMemoryEnv] = hexagonDefaultMemory
+		if hasHexagonBackend(dir) {
+			if htp, err := hexagon.VerifiedDir(hexagon.SearchDirs(dir)); err != nil {
+				slog.Warn("Hexagon NPU libraries unavailable", "error", err)
+			} else {
+				if envUpdates[adspLibraryPathEnv] == "" {
+					envUpdates[adspLibraryPathEnv] = adspLibraryPath(htp)
+				}
+				if _, set := os.LookupEnv(hexagonMemoryEnv); !set && envUpdates[hexagonMemoryEnv] == "" {
+					envUpdates[hexagonMemoryEnv] = hexagonDefaultMemory
+				}
 			}
 		}
 		addPath(dir)
@@ -566,8 +571,10 @@ const (
 	hexagonDefaultMemory = ",,3000M"
 )
 
-func hasHexagonHTPLibraries(dir string) bool {
-	matches, _ := filepath.Glob(filepath.Join(dir, "libggml-htp-v*.so"))
+// hasHexagonBackend reports whether dir holds llama.cpp's Hexagon backend,
+// whose NPU half (the signed HTP set) lives wherever hexagon.VerifiedDir finds it.
+func hasHexagonBackend(dir string) bool {
+	matches, _ := filepath.Glob(filepath.Join(dir, "*ggml-hexagon*"))
 	return len(matches) > 0
 }
 
