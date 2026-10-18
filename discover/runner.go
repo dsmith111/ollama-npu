@@ -107,6 +107,9 @@ func GPUDevices(ctx context.Context, runners []ml.FilteredRunnerDiscovery) []ml.
 					continue
 				} else if !envconfig.EnableVulkan(true) && strings.Contains(filepath.Base(dir), "vulkan") {
 					continue
+				} else if !envconfig.EnableHexagon() && strings.Contains(filepath.Base(dir), "hexagon") {
+					slog.Info("experimental Hexagon NPU support disabled.  To enable, set OLLAMA_HEXAGON=1")
+					continue
 				}
 				dirs = []string{ml.LibOllamaPath, dir}
 			} else {

@@ -605,6 +605,8 @@ if(OLLAMA_RUNNER_DIR)
         # install signed libraries built from this same llama.cpp commit (for
         # example a Microsoft-signed set published for it) instead. FastRPC
         # finds them through ADSP_LIBRARY_PATH, which the runner points here.
+        # The signed set for b11644 comes from Qualcomm's GenieX v0.9.1 release
+        # (BSD-3-Clause), whose archives omit the licence; ship it alongside.
         set(OLLAMA_HEXAGON_HTP_DIR "" CACHE PATH
             "Directory with signed libggml-htp-v*.so libraries and their libggml-htp.cat")
         set(_htp_files)
@@ -618,7 +620,7 @@ if(OLLAMA_RUNNER_DIR)
             endif()
             list(APPEND _htp_files "${OLLAMA_HEXAGON_HTP_DIR}/${_htp_name}")
         endforeach()
-        install(FILES ${_htp_files}
+        install(FILES ${_htp_files} "${CMAKE_CURRENT_SOURCE_DIR}/hexagon/GenieX-LICENSE.txt"
             DESTINATION "${_base_dest}/${OLLAMA_RUNNER_DIR}"
             COMPONENT llama-server)
     endif()

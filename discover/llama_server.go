@@ -472,6 +472,8 @@ func inferLibrary(name, description string) string {
 		return "Metal"
 	case strings.Contains(combined, "vulkan"):
 		return "Vulkan"
+	case strings.Contains(combined, "hexagon"):
+		return "Hexagon"
 	default:
 		return description
 	}

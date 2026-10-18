@@ -136,6 +136,19 @@ Available devices:
 				}},
 			},
 			{
+				name: "Hexagon NPU",
+				output: `Available devices:
+  HTP0: Hexagon (3000 MiB, 3000 MiB free)
+`,
+				libDirs: []string{"/lib/ollama", "/lib/ollama/hexagon"},
+				want: []wantDevice{{
+					name:            "HTP0",
+					library:         "Hexagon",
+					totalMiB:        3000,
+					checkIntegrated: true,
+				}},
+			},
+			{
 				name: "CUDA device filtered by compiled archs",
 				output: `ggml_cuda_init: found 1 CUDA devices (Total VRAM: 6063 MiB):
   Device 0: NVIDIA GeForce GTX 1060 6GB, compute capability 6.1, VMM: yes, VRAM: 6063 MiB
