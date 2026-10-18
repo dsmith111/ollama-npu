@@ -1366,6 +1366,65 @@ func TestSetupLlamaServerCommandEnv(t *testing.T) {
 	}
 }
 
+func TestSetupLlamaServerCommandEnvHexagon(t *testing.T) {
+	exeDir := t.TempDir()
+	exe := filepath.Join(exeDir, "llama-server")
+	if err := os.WriteFile(exe, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plainDir := t.TempDir()
+	hexDir := t.TempDir()
+	for _, name := range []string{"ggml-hexagon.dll", "libggml-htp-v73.so", "libggml-htp.cat"} {
+		if err := os.WriteFile(filepath.Join(hexDir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	adspEnv := func(gpuLibs ...string) (string, bool) {
+		cmd := exec.Command("echo")
+		SetupLlamaServerCommandEnv(cmd, exe, gpuLibs, nil)
+		for _, kv := range cmd.Env {
+			if key, value, ok := strings.Cut(kv, "="); ok && strings.EqualFold(key, adspLibraryPathEnv) {
+				return value, true
+			}
+		}
+		return "", false
+	}
+
+	t.Setenv(adspLibraryPathEnv, "")
+	os.Unsetenv(adspLibraryPathEnv)
+	if got, ok := adspEnv(ml.LibOllamaPath, plainDir); ok {
+		t.Fatalf("%s = %q for a runner without HTP libraries, want unset", adspLibraryPathEnv, got)
+	}
+	if got, _ := adspEnv(ml.LibOllamaPath, hexDir); got != hexDir {
+		t.Fatalf("%s = %q, want %q", adspLibraryPathEnv, got, hexDir)
+	}
+
+	t.Setenv(adspLibraryPathEnv, "C:\\user\\dsp")
+	if got, _ := adspEnv(ml.LibOllamaPath, hexDir); got != hexDir+";C:\\user\\dsp" {
+		t.Fatalf("%s = %q, want the runner directory ahead of the user's path", adspLibraryPathEnv, got)
+	}
+
+	memory := func() string {
+		cmd := exec.Command("echo")
+		SetupLlamaServerCommandEnv(cmd, exe, []string{ml.LibOllamaPath, hexDir}, nil)
+		for _, kv := range cmd.Env {
+			if key, value, ok := strings.Cut(kv, "="); ok && strings.EqualFold(key, hexagonMemoryEnv) {
+				return value
+			}
+		}
+		return ""
+	}
+	os.Unsetenv(hexagonMemoryEnv)
+	if got := memory(); got != hexagonDefaultMemory {
+		t.Fatalf("%s = %q, want the default budget %q", hexagonMemoryEnv, got, hexagonDefaultMemory)
+	}
+	t.Setenv(hexagonMemoryEnv, ",,1G")
+	if got := memory(); got != ",,1G" {
+		t.Fatalf("%s = %q, want the user's setting kept", hexagonMemoryEnv, got)
+	}
+}
+
 func TestFilteredEnvLogValue(t *testing.T) {
 	attrs := filteredEnv([]string{
 		"OLLAMA_DEBUG=1",

@@ -535,6 +535,14 @@ func llamaServerLibraryPaths(exe string, gpuLibs []string, envUpdates map[string
 				envUpdates["GGML_BACKEND_PATH"] = backend
 			}
 		}
+		if hasHexagonHTPLibraries(dir) {
+			if envUpdates[adspLibraryPathEnv] == "" {
+				envUpdates[adspLibraryPathEnv] = adspLibraryPath(dir)
+			}
+			if _, set := os.LookupEnv(hexagonMemoryEnv); !set && envUpdates[hexagonMemoryEnv] == "" {
+				envUpdates[hexagonMemoryEnv] = hexagonDefaultMemory
+			}
+		}
 		addPath(dir)
 	}
 	if libraryPath, ok := os.LookupEnv(llamaServerLibraryPathEnv()); ok {
@@ -543,6 +551,33 @@ func llamaServerLibraryPaths(exe string, gpuLibs []string, envUpdates map[string
 		}
 	}
 	return adjustPlatformLibraryPaths(libraryPaths, gpuLibs)
+}
+
+// adspLibraryPathEnv is where FastRPC looks for the Hexagon NPU libraries
+// (libggml-htp-v*.so) that llama.cpp's Hexagon backend loads on the DSP.
+const adspLibraryPathEnv = "ADSP_LIBRARY_PATH"
+
+// The Hexagon backend reports 0 MiB of device memory unless GGML_HEXAGON_MBUF
+// sets a total ("dynamic,static,total"). Discovery skips zero-memory devices
+// and llama-server cannot fit layers to them, so report the address space the
+// NPU can map buffers into: 3000 MiB on HTP v73 (Snapdragon X Elite).
+const (
+	hexagonMemoryEnv     = "GGML_HEXAGON_MBUF"
+	hexagonDefaultMemory = ",,3000M"
+)
+
+func hasHexagonHTPLibraries(dir string) bool {
+	matches, _ := filepath.Glob(filepath.Join(dir, "libggml-htp-v*.so"))
+	return len(matches) > 0
+}
+
+// adspLibraryPath puts dir ahead of any user-provided search path. FastRPC
+// separates entries with ';' on every platform.
+func adspLibraryPath(dir string) string {
+	if existing := os.Getenv(adspLibraryPathEnv); existing != "" {
+		return dir + ";" + existing
+	}
+	return dir
 }
 
 func findLlamaServerGPUBackend(dir string) string {

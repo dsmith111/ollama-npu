@@ -599,17 +599,41 @@ if(OLLAMA_RUNNER_DIR)
             )
         endif()
     endif()
+    if(GGML_HEXAGON)
+        # The HTP ops libraries run on the NPU, and Windows loads them only when
+        # a trusted catalog signs them. Self-built ones need test-signing, so
+        # install signed libraries built from this same llama.cpp commit (for
+        # example a Microsoft-signed set published for it) instead. FastRPC
+        # finds them through ADSP_LIBRARY_PATH, which the runner points here.
+        set(OLLAMA_HEXAGON_HTP_DIR "" CACHE PATH
+            "Directory with signed libggml-htp-v*.so libraries and their libggml-htp.cat")
+        set(_htp_files)
+        foreach(_htp_name IN ITEMS
+                libggml-htp-v73.so libggml-htp-v75.so libggml-htp-v79.so libggml-htp-v81.so
+                libggml-htp.cat libggml-htp.inf)
+            if(NOT EXISTS "${OLLAMA_HEXAGON_HTP_DIR}/${_htp_name}")
+                message(FATAL_ERROR
+                    "OLLAMA_HEXAGON_HTP_DIR must contain ${_htp_name}: signed HTP "
+                    "libraries built from llama.cpp ${LLAMA_CPP_GIT_TAG}")
+            endif()
+            list(APPEND _htp_files "${OLLAMA_HEXAGON_HTP_DIR}/${_htp_name}")
+        endforeach()
+        install(FILES ${_htp_files}
+            DESTINATION "${_base_dest}/${OLLAMA_RUNNER_DIR}"
+            COMPONENT llama-server)
+    endif()
 else()
     # CPU/base build — install llama-server, llama-quantize + all shared libs + CPU backend modules
     # RUNTIME covers executables and Windows DLLs; LIBRARY covers .so on Linux
-    install(TARGETS llama-server llama-quantize
+    # llama-perplexity is optional: presets that build it ship it for quality checks.
+    install(TARGETS llama-server llama-quantize llama-perplexity
         RUNTIME DESTINATION ${_base_dest} COMPONENT llama-server OPTIONAL)
     set(_llama_server_base_libs ggml-base ggml llama mtmd)
     if(TARGET llama-common)
         list(APPEND _llama_server_base_libs llama-common)
     endif()
     if(BUILD_SHARED_LIBS)
-        foreach(_impl_lib IN ITEMS llama-server-impl llama-quantize-impl)
+        foreach(_impl_lib IN ITEMS llama-server-impl llama-quantize-impl llama-perplexity-impl)
             if(TARGET ${_impl_lib})
                 list(APPEND _llama_server_base_libs ${_impl_lib})
             endif()

@@ -41,6 +41,42 @@
       }
     },
     {
+      "name": "windows_arm64_clang_base",
+      "hidden": true,
+      "inherits": ["default"],
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "GGML_CPU_ALL_VARIANTS": "OFF",
+        "GGML_CPU_ARM_ARCH": "armv8.7-a+fp16+dotprod+i8mm",
+        "OLLAMA_WINDOWS_RUNTIME_ARCH": "arm64"
+      }
+    },
+    {
+      "name": "cpu_arm64_clang",
+      "inherits": ["windows_arm64_clang_base"],
+      "binaryDir": "${sourceDir}/../../build/llama-server-cpu_arm64_clang",
+      "cacheVariables": {
+        "OLLAMA_RUNNER_DIR": ""
+      }
+    },
+    {
+      "name": "hexagon_arm64",
+      "inherits": ["windows_arm64_clang_base"],
+      "binaryDir": "${sourceDir}/../../build/llama-server-hexagon_arm64",
+      "cacheVariables": {
+        "GGML_HEXAGON": "ON",
+        "GGML_OPENCL": "OFF",
+        "HEXAGON_SDK_ROOT": "$env{HEXAGON_SDK_ROOT}",
+        "HEXAGON_TOOLS_ROOT": "$env{HEXAGON_TOOLS_ROOT}",
+        "PREBUILT_LIB_DIR": "windows_aarch64",
+        "OLLAMA_HEXAGON_HTP_DIR": "$env{OLLAMA_HEXAGON_HTP_DIR}",
+        "OLLAMA_RUNNER_DIR": "hexagon",
+        "OLLAMA_GPU_BACKEND": "hexagon"
+      }
+    },
+    {
       "name": "darwin",
       "inherits": ["default"],
       "binaryDir": "${sourceDir}/../../build/llama-server-darwin",
@@ -247,6 +283,16 @@
       "name": "cpu_arm64",
       "configurePreset": "cpu_arm64",
       "targets": ["llama-server", "llama-quantize"]
+    },
+    {
+      "name": "cpu_arm64_clang",
+      "configurePreset": "cpu_arm64_clang",
+      "targets": ["llama-server", "llama-quantize", "llama-perplexity"]
+    },
+    {
+      "name": "hexagon_arm64",
+      "configurePreset": "hexagon_arm64",
+      "targets": ["ggml-hexagon"]
     },
     {
       "name": "darwin",
