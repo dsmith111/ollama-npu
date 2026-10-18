@@ -100,9 +100,29 @@ offered only the CPU, and the same greedy prompt gave the same text there.
 - BSD-3-Clause allows redistribution in binary form when the copyright notice, the
   conditions and the disclaimer go with it, and Qualcomm's name is not used to endorse the
   product. The release archives omit the licence file, so the hexagon preset installs the
-  v0.9.1 `LICENSE`, verbatim, as `GenieX-LICENSE.txt`. GenieX's README adds that use is
-  "also subject to Qualcomm's Terms of Use" (the qualcomm.com site terms), which were not
-  reviewed here.
+  v0.9.1 `LICENSE`, verbatim, as `GenieX-LICENSE.txt`.
+- GenieX's README adds: "Use of this project is also subject to Qualcomm's Terms of Use".
+  Those terms (revised May 19, 2026) leave the BSD-3 grant standing: their limits on
+  downloaded content (one device, personal and non-commercial use) give way where
+  "applicable license agreements with Qualcomm" allow more (section 7.4). They add four
+  things:
+  - **Responsible AI License** (section 8). AI "features, models, algorithms, or related
+    materials" that Qualcomm makes available through its sites and services also come
+    under Qualcomm's RAIL (revised February 17, 2026), which itself claims any such
+    materials from Qualcomm Technologies. GenieX is Qualcomm's AI runtime, so its
+    libraries plausibly do. The RAIL's use
+    restrictions apply "notwithstanding any provision of the Applicable Agreement to the
+    contrary", and the licensee "will not (and will not permit any other person to)" use
+    the materials for any of 20 purposes. These include military use (including any
+    project a military organization sponsors), predicting crime, and generating content
+    "without expressly and intelligibly disclosing that the text is machine generated".
+    Restrictions on fields of use fall outside the Open Source Definition (criterion 6).
+  - **Export and sanctions** (section 3): no export of the materials, even inside another
+    product, to sanctioned territories or restricted parties, and best efforts down the
+    chain for the Russia and Belarus rules.
+  - **No patent licence**, express or implied (section 7.5); BSD-3 has no patent grant
+    either.
+  - **No suggested association** with Qualcomm products or trademarks (section 7.4).
 - The signature covers these exact bytes, so ship them unmodified. Another llama.cpp
   commit needs a signed set built from that commit.
 - `ggml-hexagon.dll` is built from llama.cpp sources. Its Hexagon SDK content is the
@@ -112,6 +132,13 @@ offered only the CPU, and the same greedy prompt gave the same text there.
   and Windows libraries; FastRPC (`libcdsprpc.dll`) comes from the device driver. Upstream
   llama.cpp publishes binaries built this way (`bin-android-arm64-snapdragon`,
   `bin-linux-arm64-snapdragon`), though none for Windows.
+
+So bundling the signed set would carry Qualcomm's use restrictions into every fork
+package. The fork already keeps Qualcomm's QNN runtime out of its package: `ollama npu setup
+--provider qnn` downloads pinned, hash-checked NuGet packages into a fresh directory, which
+the user selects with `OLLAMA_ORT_PATH`. Fetching the GenieX archive below the same way, at
+setup time and checked against these hashes, keeps the fork package under its own licence;
+each user then gets Qualcomm's files from Qualcomm, under Qualcomm's terms.
 
 The files, identical in `geniex-sdk-windows-arm64-v0.9.1.zip` (SHA256 `2ed2bf63f042086c525b442081ed8d7ad4ff76bcce8bad6eeabe1cf38cc0a1b5`)
 and `geniex-bench-windows-arm64-v0.9.1.zip` (SHA256 `e465931fbf4ccfbd011632fb1b6e337362963d7550c24d6a808d99504565acdb`),
@@ -130,4 +157,6 @@ under `lib\llama_cpp`:
 
 - Packaging with the clang/MSVC-ABI build, and a memory budget per HTP version (3000 MiB
   is v73's).
+- Fetching the signed set at setup time instead of bundling it (see above); the preset
+  still installs it for local builds.
 - Moving llama.cpp past b11644 waits for a signed HTP set built from the new commit.
