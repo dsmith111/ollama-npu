@@ -90,6 +90,11 @@ fallback to a later directory. The runner then sets:
 Flash attention is allowed on Hexagon (`--flash-attn auto`); turning it off halves NPU
 prefill.
 
+When every selected device is a Hexagon NPU and the model is expected to fit whole (weights
+and KV cache plus llama-server's 1 GiB fit margin), the runner also passes `--poll 0`, so
+llama-server's CPU threads sleep instead of polling between ops. A model split with the CPU
+keeps the default polling: its CPU layers decoded 28% slower without it.
+
 ## Measured (X1E78100, Qwen2.5-1.5B-Instruct)
 
 Through `/api/generate` (556-token prompt, 128 tokens):
@@ -100,7 +105,18 @@ Through `/api/generate` (556-token prompt, 128 tokens):
 | GGUF Q4_0 on the CPU (`num_gpu 0`) | 834 tok/s | 55.3 tok/s |
 | QNN w8a16 ORT bundle (NPU) | 772 tok/s | 20.2 tok/s |
 
-The CPU decodes faster than the NPU; the NPU's gains are prefill, power and a free CPU.
+The NPU's main gain is leaving the CPU to the user: an agent running on it barely competes
+with your own work, where a model on the CPU alone can saturate a weaker machine and slow
+you and the agent alike. Power matters mostly for chat use. The CPU decodes faster. The
+same model (540-token prompt, 256 tokens, two requests; through the fork, except the
+default-polling row, which ran llama-server directly with the fork's arguments):
+
+| Where it runs | llama-server CPU use | Decode | Prefill |
+|---|---|---|---|
+| NPU, with `--poll 0` | 0.10 cores | 34.0 tok/s | 1,315 tok/s |
+| NPU, default polling | 1.42 cores | 30.2 tok/s | 1,223 tok/s |
+| CPU (`num_gpu 0`) | 5.32 cores | 73.2 tok/s | 567 tok/s |
+
 Perplexity on wikitext-2 against BF16: Q4_0 1.09x, Q4_K_M 1.05x, Q8_0 1.00x, with the same
 results on the NPU as on the CPU.
 
