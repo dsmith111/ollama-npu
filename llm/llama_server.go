@@ -206,6 +206,7 @@ type llamaServerLaunchConfig struct {
 	gpuLibs              []string
 	extraEnvs            map[string]string
 	forceNoMMProjOffload bool
+	predictedVRAM        uint64 // weights and KV cache (PredictServerVRAM)
 }
 
 func newLlamaServerHTTPClient() *http.Client {
@@ -421,6 +422,7 @@ func startLlamaServer(launch llamaServerLaunchConfig, out io.Writer) (cmd *exec.
 	}
 
 	params = appendFlashAttentionArgs(params, launch.gpus)
+	params = appendHexagonPollArgs(params, launch)
 
 	params = appendBatchArgs(params, launch.opts, launch.embedding, launch.numParallel)
 
@@ -708,6 +710,42 @@ func appendLoadModeArgs(params []string, opts api.Options, gpus []ml.DeviceInfo)
 	}
 
 	return params
+}
+
+// hexagonFitMargin is what llama-server's fit keeps free on each device (its
+// default --fit-target), so it also decides whether a model loads whole.
+const hexagonFitMargin = 1 << 30
+
+// appendHexagonPollArgs lets llama-server's idle CPU threads sleep when the
+// whole model runs on the Hexagon NPU. By default they poll for work between
+// ops: on a Snapdragon X Elite, Qwen2.5-1.5B on the NPU kept 1.4 cores busy
+// that way and 0.06 with --poll 0, at the same speed. A model split with the
+// CPU needs the polling (its decode was 28% slower without it), so only whole
+// fits qualify.
+func appendHexagonPollArgs(params []string, launch llamaServerLaunchConfig) []string {
+	if !launch.runsWholeOnHexagon() {
+		return params
+	}
+	return append(params, "--poll", "0")
+}
+
+// runsWholeOnHexagon reports whether every selected device is a Hexagon NPU and
+// the model is expected to fit on them whole.
+func (launch llamaServerLaunchConfig) runsWholeOnHexagon() bool {
+	if len(launch.gpus) == 0 || launch.opts.NumGPU == 0 || launch.predictedVRAM == 0 {
+		return false
+	}
+	if launch.opts.NumGPU > 0 && uint64(launch.opts.NumGPU) < launch.modelLayers {
+		return false
+	}
+	var total uint64
+	for _, gpu := range launch.gpus {
+		if !strings.EqualFold(gpu.Library, "Hexagon") {
+			return false
+		}
+		total += gpu.TotalMemory
+	}
+	return launch.predictedVRAM+hexagonFitMargin <= total
 }
 
 func appendMainGPUArgs(params []string, opts api.Options) []string {
@@ -1002,22 +1040,23 @@ func NewLlamaServerRunner(
 	serverEnvs["LLAMA_MEDIA_MARKER"] = mediaMarker
 
 	launch := llamaServerLaunchConfig{
-		modelPath:    splitModel.modelPath,
-		modelArch:    arch,
-		draftType:    draftType,
-		projectors:   slices.Clone(splitModel.projectors),
-		mmprojMemory: mmprojMemory,
-		modelLayers:  f.KV().BlockCount() + 1,
-		adapters:     slices.Clone(adapters),
-		opts:         opts,
-		numParallel:  numParallel,
-		kvCacheType:  kvCacheType,
-		embedding:    isEmbedding,
-		decision:     decisionType != "",
-		config:       config,
-		gpus:         slices.Clone(gpus),
-		gpuLibs:      slices.Clone(gpuLibs),
-		extraEnvs:    cloneStringMap(serverEnvs),
+		modelPath:     splitModel.modelPath,
+		modelArch:     arch,
+		draftType:     draftType,
+		projectors:    slices.Clone(splitModel.projectors),
+		mmprojMemory:  mmprojMemory,
+		modelLayers:   f.KV().BlockCount() + 1,
+		adapters:      slices.Clone(adapters),
+		opts:          opts,
+		numParallel:   numParallel,
+		kvCacheType:   kvCacheType,
+		embedding:     isEmbedding,
+		decision:      decisionType != "",
+		config:        config,
+		gpus:          slices.Clone(gpus),
+		gpuLibs:       slices.Clone(gpuLibs),
+		extraEnvs:     cloneStringMap(serverEnvs),
+		predictedVRAM: PredictServerVRAM(modelPath, f, opts.NumCtx*numParallel),
 	}
 
 	s := &llamaServerRunner{

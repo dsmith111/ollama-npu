@@ -2095,6 +2095,38 @@ func TestAppendBatchArgs(t *testing.T) {
 	}
 }
 
+func TestAppendHexagonPollArgs(t *testing.T) {
+	const gib = uint64(1) << 30
+	npu := ml.DeviceInfo{DeviceID: ml.DeviceID{Library: "Hexagon"}, TotalMemory: 5 * gib}
+	gpu := ml.DeviceInfo{DeviceID: ml.DeviceID{Library: "CUDA"}, TotalMemory: 24 * gib}
+	auto := api.Options{Runner: api.Runner{NumGPU: -1}}
+	tests := []struct {
+		name      string
+		gpus      []ml.DeviceInfo
+		opts      api.Options
+		predicted uint64
+		want      bool
+	}{
+		{"whole on the NPU", []ml.DeviceInfo{npu}, auto, 2 * gib, true},
+		{"all layers requested", []ml.DeviceInfo{npu}, api.Options{Runner: api.Runner{NumGPU: 29}}, 2 * gib, true},
+		{"split with the CPU (too big)", []ml.DeviceInfo{npu}, auto, 4*gib + 1, false},
+		{"split with the CPU (fewer layers)", []ml.DeviceInfo{npu}, api.Options{Runner: api.Runner{NumGPU: 10}}, 2 * gib, false},
+		{"CPU only", []ml.DeviceInfo{npu}, api.Options{Runner: api.Runner{NumGPU: 0}}, 2 * gib, false},
+		{"no NPU", nil, auto, 2 * gib, false},
+		{"another GPU", []ml.DeviceInfo{gpu}, auto, 2 * gib, false},
+		{"unknown size", []ml.DeviceInfo{npu}, auto, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launch := llamaServerLaunchConfig{gpus: tt.gpus, opts: tt.opts, modelLayers: 29, predictedVRAM: tt.predicted}
+			got := appendHexagonPollArgs([]string{"base"}, launch)
+			if want := map[bool][]string{true: {"base", "--poll", "0"}, false: {"base"}}[tt.want]; !slices.Equal(got, want) {
+				t.Fatalf("args = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestAppendFlashAttentionArgs(t *testing.T) {
 	supportedGPU := []ml.DeviceInfo{{DeviceID: ml.DeviceID{Library: "CUDA"}, DriverMajor: 13, ComputeMajor: 8, ComputeMinor: 9}}
 	oldGPU := []ml.DeviceInfo{
