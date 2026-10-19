@@ -564,11 +564,17 @@ const adspLibraryPathEnv = "ADSP_LIBRARY_PATH"
 
 // The Hexagon backend reports 0 MiB of device memory unless GGML_HEXAGON_MBUF
 // sets a total ("dynamic,static,total"). Discovery skips zero-memory devices
-// and llama-server cannot fit layers to them, so report the address space the
-// NPU can map buffers into: 3000 MiB on HTP v73 (Snapdragon X Elite).
+// and llama-server cannot fit layers to them. The total is only reported, not
+// enforced: an NPU session maps about 3.5 GiB at a time on every HTP version,
+// and the backend maps weights in and out for larger models. So the default is
+// that window plus the 1 GiB llama-server's fit keeps free (its default
+// target): models up to about 4 GiB load whole on the NPU. Splitting one
+// between the NPU and the CPU was slower than either; on a Snapdragon X
+// Elite, Phi-3.5-mini (3.6 GiB) prefilled at 491 tok/s whole and 279 split
+// under the former 3000 MiB.
 const (
 	hexagonMemoryEnv     = "GGML_HEXAGON_MBUF"
-	hexagonDefaultMemory = ",,3000M"
+	hexagonDefaultMemory = ",,5120M"
 )
 
 // hasHexagonBackend reports whether dir holds llama.cpp's Hexagon backend,
