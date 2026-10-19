@@ -140,8 +140,9 @@ try {
         $toolsInfo = @($sdkInfo.root.tools.info | Where-Object { $_.name -eq "Hexagon Tools" })
         if ($toolsInfo.Count -ne 1) { throw "hexagon_sdk.json in $hexagonSdk does not name its Hexagon Tools" }
         $hexagonTools = Join-Path $hexagonSdk $toolsInfo[0].path
+        $vsInstaller = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer"
         if (-not $VisualStudioRoot) {
-            $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+            $vswhere = Join-Path $vsInstaller "vswhere.exe"
             if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw "Missing build prerequisite: $vswhere (or pass -VisualStudioRoot)" }
             $VisualStudioRoot = @(& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath)[0]
             if (-not $VisualStudioRoot) { throw "No Visual Studio with the ARM64 C++ tools was found" }
@@ -209,6 +210,8 @@ try {
         # hexagon` downloads them.
         $saved = Save-Environment
         try {
+            # Visual Studio's own environment scripts call vswhere.exe through PATH.
+            if (Test-Path -LiteralPath $vsInstaller -PathType Container) { $env:PATH = "$vsInstaller;$env:PATH" }
             Import-Module $devShell
             Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=arm64 -host_arch=arm64 -no_logo" | Out-Null
             $env:PATH = (@($env:PATH -split ';') | Where-Object { $_ -and $_ -ne $bin }) -join ';'
@@ -228,7 +231,9 @@ try {
         # x64 code. Native ARM64 binaries never import it and llama-server cannot load it;
         # the import audit below still fails the package if anything needs it.
         foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $stage "lib\ollama\hexagon") -File -Filter "*.dll")) {
-            if (@(& $readobj --file-headers $file.FullName) -match 'Machine: IMAGE_FILE_MACHINE_ARM64EC') {
+            # The file header's machine: ARM64X files also list their ARM64EC view further down.
+            $machine = @(& $readobj --file-headers $file.FullName | Select-String -Pattern '^\s*Machine:' | Select-Object -First 1)
+            if ($machine.Count -eq 1 -and $machine[0].Line -match 'IMAGE_FILE_MACHINE_ARM64EC') {
                 Remove-Item -LiteralPath $file.FullName
             }
         }
