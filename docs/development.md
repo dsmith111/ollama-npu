@@ -153,8 +153,8 @@ The build directory must be new or empty; cached development builds are refused.
 The script scopes/restores compiler variables, disables external Go workspaces
 and the local llama.cpp source override. It builds the existing `cpu_arm64`
 preset (`GGML_NATIVE=OFF`, `GGML_CPU_ALL_VARIANTS=ON`: CPU backends from plain
-ARMv8.0 up to ARMv8.6 with dotprod, fp16 and i8mm, chosen at load from the
-features Windows reports; llama.cpp lists no Windows on Arm variants yet, so
+ARMv8.0 up to ARMv8.6 with dotprod and i8mm, chosen at load from the features
+Windows reports; llama.cpp lists no Windows on Arm variants yet, so
 `llama/compat/002-windows-arm64-cpu-variants.patch` adds them) and matching CLI, bundles
 runtime peers/notices and audits ARM64/ARM64X binaries and imports without resolving
 dependencies through developer `PATH`. Default identity:
