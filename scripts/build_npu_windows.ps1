@@ -215,7 +215,7 @@ try {
             Import-Module $devShell
             Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=arm64 -host_arch=arm64 -no_logo" | Out-Null
             $env:PATH = (@($env:PATH -split ';') | Where-Object { $_ -and $_ -ne $bin }) -join ';'
-            foreach ($name in @("CC", "CXX", "OLLAMA_HEXAGON_HTP_DIR")) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+            foreach ($variable in @("CC", "CXX", "OLLAMA_HEXAGON_HTP_DIR")) { Remove-Item "Env:$variable" -ErrorAction SilentlyContinue }
             $env:HEXAGON_SDK_ROOT = $hexagonSdk
             $env:HEXAGON_TOOLS_ROOT = $hexagonTools
             Invoke-Checked $cmake @("-S", "llama\server", "--preset", "hexagon_arm64", "-B", $hexagonBuild,
