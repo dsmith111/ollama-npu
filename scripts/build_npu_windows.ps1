@@ -224,6 +224,14 @@ try {
         } finally {
             Restore-Environment $saved
         }
+        # The ARM64 Visual C++ redist also ships vcruntime140_1.dll as ARM64EC, for emulated
+        # x64 code. Native ARM64 binaries never import it and llama-server cannot load it;
+        # the import audit below still fails the package if anything needs it.
+        foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $stage "lib\ollama\hexagon") -File -Filter "*.dll")) {
+            if (@(& $readobj --file-headers $file.FullName) -match 'Machine: IMAGE_FILE_MACHINE_ARM64EC') {
+                Remove-Item -LiteralPath $file.FullName
+            }
+        }
         if (@(Get-ChildItem -LiteralPath $stage -Recurse -File -Filter "libggml-htp*").Count -gt 0) {
             throw "Qualcomm's signed HTP libraries must not be packaged; ollama npu setup --provider hexagon downloads them"
         }
