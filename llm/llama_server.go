@@ -2906,7 +2906,13 @@ type memoryParsingWriter struct {
 	inner   io.Writer
 	runner  *llamaServerRunner
 	buffers map[memoryBufferKey]memoryBuffer
+	// partial holds output after the last newline: pipe reads split llama-server's
+	// output at arbitrary points, so lines are parsed only once complete.
+	partial []byte
 }
+
+// maxPartialLine bounds the unterminated output kept between writes.
+const maxPartialLine = 64 * 1024
 
 type memoryBufferKey struct {
 	component string
@@ -2966,47 +2972,72 @@ func (w *memoryParsingWriter) Write(b []byte) (int, error) {
 			w.runner.noteLoadActivity(time.Now())
 		}
 
-		func() {
-			w.runner.memoryMu.Lock()
-			defer w.runner.memoryMu.Unlock()
-
-			if match := deviceFreeRegex.FindSubmatch(b); match != nil {
-				devName := string(match[1])
-				if mib, err := strconv.ParseUint(string(match[2]), 10, 64); err == nil {
-					w.runner.systemFreeAtLoad[devName] = mib * 1024 * 1024
-				}
-			}
-			for _, match := range offloadedLayersRegex.FindAllSubmatch(b, -1) {
-				loaded, loadedErr := strconv.ParseUint(string(match[1]), 10, 64)
-				total, totalErr := strconv.ParseUint(string(match[2]), 10, 64)
-				if loadedErr == nil && totalErr == nil {
-					w.runner.gpuLayers = loaded
-					w.runner.totalLayers = total
-				}
-			}
-			for _, match := range fitOverflowingLayersRegex.FindAllSubmatch(b, -1) {
-				overflowing, err := strconv.ParseUint(string(match[1]), 10, 64)
-				if err == nil && overflowing > 0 {
-					w.runner.gpuLayerOverflow += int(overflowing)
-				}
-			}
-			for _, match := range bufferSizeRegex.FindAllSubmatch(b, -1) {
-				backendName := string(match[2])
-				if mib, err := strconv.ParseFloat(string(match[4]), 64); err == nil {
-					if w.buffers == nil {
-						w.buffers = make(map[memoryBufferKey]memoryBuffer)
-					}
-					w.buffers[memoryBufferKey{
-						component: string(match[1]),
-						backend:   backendName,
-						kind:      string(match[3]),
-					}] = memoryBuffer{bytes: uint64(mib * 1024 * 1024)}
-					w.updateRunnerMemoryLocked()
-				}
-			}
-		}()
+		if lines := w.completeLines(b); len(lines) > 0 {
+			w.parse(lines)
+		}
 	}
 	return w.inner.Write(b)
+}
+
+// completeLines returns the complete lines that b finishes, keeping any
+// unterminated tail for the next write.
+func (w *memoryParsingWriter) completeLines(b []byte) []byte {
+	data := b
+	if len(w.partial) > 0 {
+		data = append(w.partial, b...)
+	}
+	end := bytes.LastIndexByte(data, '\n')
+	tail := data[end+1:]
+	if len(tail) > maxPartialLine {
+		tail = tail[len(tail)-maxPartialLine:]
+	}
+	w.partial = append([]byte(nil), tail...)
+	if end < 0 {
+		return nil
+	}
+	return data[:end+1]
+}
+
+// parse reads load details from complete lines of llama-server output.
+// Write calls come from one goroutine (os/exec copies the child's output).
+func (w *memoryParsingWriter) parse(b []byte) {
+	w.runner.memoryMu.Lock()
+	defer w.runner.memoryMu.Unlock()
+
+	if match := deviceFreeRegex.FindSubmatch(b); match != nil {
+		devName := string(match[1])
+		if mib, err := strconv.ParseUint(string(match[2]), 10, 64); err == nil {
+			w.runner.systemFreeAtLoad[devName] = mib * 1024 * 1024
+		}
+	}
+	for _, match := range offloadedLayersRegex.FindAllSubmatch(b, -1) {
+		loaded, loadedErr := strconv.ParseUint(string(match[1]), 10, 64)
+		total, totalErr := strconv.ParseUint(string(match[2]), 10, 64)
+		if loadedErr == nil && totalErr == nil {
+			w.runner.gpuLayers = loaded
+			w.runner.totalLayers = total
+		}
+	}
+	for _, match := range fitOverflowingLayersRegex.FindAllSubmatch(b, -1) {
+		overflowing, err := strconv.ParseUint(string(match[1]), 10, 64)
+		if err == nil && overflowing > 0 {
+			w.runner.gpuLayerOverflow += int(overflowing)
+		}
+	}
+	for _, match := range bufferSizeRegex.FindAllSubmatch(b, -1) {
+		backendName := string(match[2])
+		if mib, err := strconv.ParseFloat(string(match[4]), 64); err == nil {
+			if w.buffers == nil {
+				w.buffers = make(map[memoryBufferKey]memoryBuffer)
+			}
+			w.buffers[memoryBufferKey{
+				component: string(match[1]),
+				backend:   backendName,
+				kind:      string(match[3]),
+			}] = memoryBuffer{bytes: uint64(mib * 1024 * 1024)}
+			w.updateRunnerMemoryLocked()
+		}
+	}
 }
 
 func (w *memoryParsingWriter) updateRunnerMemoryLocked() {

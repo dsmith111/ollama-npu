@@ -3248,6 +3248,31 @@ func TestMemoryParsingWriter(t *testing.T) {
 	}
 }
 
+// Pipe reads split llama-server's output at arbitrary points; a buffer line cut
+// in two must still count (a Hexagon load once reported no NPU memory this way).
+func TestMemoryParsingWriterParsesLinesSplitAcrossWrites(t *testing.T) {
+	output := "load_tensors:          CPU model buffer size =    83.46 MiB\n" +
+		"load_tensors:         HTP0 model buffer size =   366.33 MiB\n" +
+		"llama_kv_cache:       HTP0 KV buffer size =   448.00 MiB\n" +
+		"sched_reserve:       HTP0 compute buffer size =    26.01 MiB\n" +
+		"load_tensors: offloaded 29/29 layers to GPU\n"
+	for cut := 1; cut < len(output); cut++ {
+		runner := &llamaServerRunner{vramByDevice: make(map[string]uint64)}
+		w := &memoryParsingWriter{inner: io.Discard, runner: runner}
+		for _, chunk := range []string{output[:cut], output[cut:]} {
+			if _, err := w.Write([]byte(chunk)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got, want := runner.vramByDevice["HTP0"]/(1024*1024), uint64(366+448+26); got != want {
+			t.Fatalf("cut at %d: vramByDevice[HTP0] = %d MiB, want %d", cut, got, want)
+		}
+		if runner.gpuLayers != 29 || runner.totalLayers != 29 {
+			t.Fatalf("cut at %d: layers = %d/%d, want 29/29", cut, runner.gpuLayers, runner.totalLayers)
+		}
+	}
+}
+
 func TestMemoryParsingWriterRecordsOutputActivityWithoutNewline(t *testing.T) {
 	runner := &llamaServerRunner{}
 	w := &memoryParsingWriter{inner: io.Discard, runner: runner}
