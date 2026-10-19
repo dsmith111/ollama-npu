@@ -2,8 +2,8 @@
 
 This branch runs GGUF models on the Hexagon NPU of Snapdragon X laptops through the
 ordinary llama-server runner, using llama.cpp's Hexagon backend. It is experimental and
-off by default. The build below works on a Snapdragon X Elite (X1E78100); packaging is
-open.
+off by default. It works on a Snapdragon X Elite (X1E78100) from a local build (below) or
+a portable package (`scripts\build_npu_windows.ps1 -HexagonSDKRoot`).
 
 ## Enabling it
 
@@ -109,6 +109,16 @@ Setup, checked with a payload that leaves the set out: `ollama npu setup --provi
 installed catalog still validates as Microsoft-signed. Selected with
 `OLLAMA_HEXAGON_PATH`, the set put all 29 layers on HTP0 again; with no set reachable,
 discovery logged the setup hint and the model ran on the CPU.
+
+The portable package (LLVM-MinGW CPU payload plus the MSVC-ABI Hexagon backend), checked
+from its extracted ZIP with the set from setup:
+
+- Qwen2.5-1.5B Q4_0 loaded all 29 layers on HTP0 (898 MiB) and decoded 24 tokens at
+  about 39 tok/s; the package's CPU-only build ran it at about 67 tok/s.
+- `npu-model` converted Qwen2.5-0.5B with the package's own `llama-quantize` and
+  verified it with its `llama-server` and `llama-perplexity`: 25/25 layers on HTP0,
+  perplexity 1.16x the 16-bit model, long-prompt retrieval correct at 875 and 1,763
+  tokens, and the chat template matching transformers'.
 
 ## Redistribution
 
