@@ -174,7 +174,8 @@ the CPU, which was slower than running whole on the NPU. Through `/api/generate`
 
 With an 8K context and a 6000 MiB budget, Phi-3.5-mini put 4.7 GiB on the NPU, answered a
 618-token retrieval prompt correctly at 7.5 tok/s, and decoded at 2.3 tok/s after a
-5,176-token prompt. Models up to Qwen3-1.7B (1.5 GiB) loaded whole under every budget tried.
+5,176-token prompt. Models up to Qwen3-1.7B (1.5 GiB) loaded whole under every budget
+tried.
 
 How much fits whole: a session addresses about 3 GiB at a time (3000 MiB on v73, 3200 MiB
 on later versions, the backend's defaults) and maps weights in and out beyond that, but
