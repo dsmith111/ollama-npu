@@ -80,12 +80,11 @@ directory. It looks for the signed set in `OLLAMA_HEXAGON_PATH`, then `lib\ollam
 fallback to a later directory. The runner then sets:
 
 - `ADSP_LIBRARY_PATH` to that directory, so FastRPC finds the NPU libraries;
-- `GGML_HEXAGON_MBUF=,,5120M` unless set: the backend otherwise reports 0 MiB, and
+- `GGML_HEXAGON_MBUF=,,6144M` unless set: the backend otherwise reports 0 MiB, and
   discovery drops zero-memory devices. The total is only reported to the schedulers, not
-  enforced. An NPU session maps about 3.5 GiB at a time on every HTP version, and the
-  backend maps weights in and out for larger models. 5120 MiB is that window plus the
-  1 GiB that llama-server's fit keeps free, so models up to about 4 GiB load whole on
-  the NPU (see the budget measurements below).
+  enforced. llama-server's fit keeps 1 GiB of it free, so models up to 5 GiB on the NPU
+  (Qwen2.5-7B at Q4_0 with up to a 16K context) load whole, and larger ones are split with
+  the CPU (see the budget measurements below).
 
 Flash attention is allowed on Hexagon (`--flash-attn auto`); turning it off halves NPU
 prefill.
@@ -165,18 +164,39 @@ on the CPU ("Okay,8888..."), while dotprod and i8mm alone were as fast.
 
 `GGML_HEXAGON_MBUF`'s total decides, through llama-server's fit (which keeps 1 GiB free),
 how much of a model the fork places on the NPU; a model that does not fit is split with
-the CPU. Splits were the slowest option. Through `/api/generate` (prefill / decode,
-first token):
+the CPU, which was slower than running whole on the NPU. Through `/api/generate`
+(prefill / decode, first token):
 
-| Model, size at 4K context | 3000 MiB (former default) | 5120 MiB (default) |
+| Model, size at 4K context | 3000 MiB (an earlier default) | 5120 MiB or more |
 |---|---|---|
 | Phi-4-mini-instruct Q4_0, 2.8 GiB | split 20/33 layers: 384 / 9.0 tok/s, 1.42 s | whole: 713 / 12.8 tok/s, 0.78 s |
 | Phi-3.5-mini-instruct Q4_0, 3.6 GiB | split: 279 / 8.9 tok/s, 2.26 s | whole: 491 / 9.7 tok/s, 1.32 s |
 
-Beyond the session window it still runs, more slowly: with an 8K context and a 6000 MiB
-budget, Phi-3.5-mini put 4.7 GiB on the NPU, answered a 618-token retrieval prompt
-correctly at 7.5 tok/s, and decoded at 2.3 tok/s after a 5,176-token prompt. Models up to
-Qwen3-1.7B (1.5 GiB) loaded whole under either budget.
+With an 8K context and a 6000 MiB budget, Phi-3.5-mini put 4.7 GiB on the NPU, answered a
+618-token retrieval prompt correctly at 7.5 tok/s, and decoded at 2.3 tok/s after a
+5,176-token prompt. Models up to Qwen3-1.7B (1.5 GiB) loaded whole under every budget tried.
+
+How much fits whole: a session addresses about 3 GiB at a time (3000 MiB on v73, 3200 MiB
+on later versions, the backend's defaults) and maps weights in and out beyond that, but
+the backend keeps every buffer it has used mapped through FastRPC, so a model's whole NPU
+footprint must map at once. Qwen2.5-7B-Instruct on the 16 GB X1E78100, through
+llama-server directly with the fork's arguments (540-token prompt, 256 tokens, two
+requests):
+
+| Qwen2.5-7B placement | On the NPU | llama-server CPU use | Decode | Prefill |
+|---|---|---|---|---|
+| Q4_0, one session, 4K context | 4.2 GiB | 0.03 cores | 9.8 tok/s | 376 tok/s |
+| Q4_0, one session, 16K context | 4.9 GiB | 0.02 cores | 9.8 tok/s | 376 tok/s |
+| Q4_0, one session, 32K context | 5.8 GiB | 0.01 cores | 9.8 tok/s | 378 tok/s |
+| Q4_0, 4K, split 27/29 with the CPU (5120 MiB) | 3.9 GiB | 1.42 cores | 6.5 tok/s | 294 tok/s |
+| Q4_0, 4K, two sessions (`GGML_HEXAGON_DEVICES=2`) | 4.2 GiB | 0.01 cores | 1.0 tok/s | 160 tok/s |
+| Q4_0, 4K, on the CPU | none | 5.81 cores | 20.6 tok/s | 124 tok/s |
+| Q8_0, one session, 4K context | 7.4 GiB | did not load (below) | | |
+
+The Q8_0 loaded, then failed to map a buffer on its first run, once with 7.2 GiB already
+mapped (3.7 GB of memory was available before the load) and once with 6.2 GiB. The limit
+is probably the memory Windows can lock for the NPU, so it would vary with the machine and
+its load; 6144 MiB keeps whole models at 5 GiB or less, below every failure.
 
 ## Redistribution
 
@@ -244,11 +264,10 @@ under `lib\llama_cpp`:
 
 ## Open
 
-- The memory budget was measured on HTP v73 only. The ~3.5 GiB session window is the same
-  on every version per llama.cpp's docs, but v75-v81 devices have not been checked.
-- Models above about 4 GiB: layer-splitting across virtual sessions
-  (`GGML_HEXAGON_DEVICES=2`) avoids weight remapping, but the fork has not been tried
-  with more than one HTP device.
+- The memory budget was measured on HTP v73 with 16 GB only. What limits a session's
+  footprint (failures with 6.2-7.2 GiB mapped) is not confirmed; machines with more memory
+  may load larger models whole with a larger `GGML_HEXAGON_MBUF`, and v81 maps weights
+  with 64-bit DMA. Neither has been checked.
 - CPU prefill: the spike's single CPU backend built with Visual Studio's clang (MSVC ABI,
   armv8.7 with fp16) prefilled about 1.5x faster than the package's LLVM-MinGW variants
   (Qwen2.5-1.5B: 828 vs 556 tok/s) and decoded 10-15% slower. fp16 is not the cause; the

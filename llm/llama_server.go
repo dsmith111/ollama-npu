@@ -567,16 +567,19 @@ const adspLibraryPathEnv = "ADSP_LIBRARY_PATH"
 // The Hexagon backend reports 0 MiB of device memory unless GGML_HEXAGON_MBUF
 // sets a total ("dynamic,static,total"). Discovery skips zero-memory devices
 // and llama-server cannot fit layers to them. The total is only reported, not
-// enforced: an NPU session maps about 3.5 GiB at a time on every HTP version,
-// and the backend maps weights in and out for larger models. So the default is
-// that window plus the 1 GiB llama-server's fit keeps free (its default
-// target): models up to about 4 GiB load whole on the NPU. Splitting one
-// between the NPU and the CPU was slower than either; on a Snapdragon X
-// Elite, Phi-3.5-mini (3.6 GiB) prefilled at 491 tok/s whole and 279 split
-// under the former 3000 MiB.
+// enforced. A session addresses about 3 GiB at a time and maps weights in and
+// out beyond that, but the backend keeps every buffer it has used mapped
+// through FastRPC, so a model's whole NPU footprint must map at once. On a
+// 16 GB Snapdragon X Elite, Qwen2.5-7B ran whole on one session with up to
+// 5.8 GiB on the NPU (Q4_0 with a 32K context, 9.8 tok/s), and its Q8_0
+// (7.4 GiB) failed to map. The alternatives were slower: at 4K, the Q4_0
+// decoded at 6.5 tok/s split 27/29 with the CPU (under the former 5120 MiB)
+// and at 1.0 across two sessions (GGML_HEXAGON_DEVICES=2). So the default is
+// 6144 MiB: llama-server's fit keeps 1 GiB free, which loads models up to
+// 5 GiB whole on the NPU.
 const (
 	hexagonMemoryEnv     = "GGML_HEXAGON_MBUF"
-	hexagonDefaultMemory = ",,5120M"
+	hexagonDefaultMemory = ",,6144M"
 )
 
 // hasHexagonBackend reports whether dir holds llama.cpp's Hexagon backend,
