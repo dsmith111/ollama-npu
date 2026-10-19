@@ -68,6 +68,9 @@ build you may also bundle the signed set there: set `OLLAMA_HEXAGON_HTP_DIR` to 
 archive's `lib\llama_cpp` folder, and the preset installs the six files and GenieX's
 licence (configure fails if a file is missing). Packages leave the set out.
 
+For a portable package, `scripts\build_npu_windows.ps1 -HexagonSDKRoot ...` adds this
+backend to the LLVM-MinGW package (see [development.md](development.md)).
+
 ## What the runner does
 
 With `OLLAMA_HEXAGON=1`, discovery treats `lib\ollama\hexagon` like any GPU backend
@@ -144,8 +147,9 @@ discovery logged the setup hint and the model ran on the CPU.
   llama.cpp commit needs a signed set built from that commit.
 - `ggml-hexagon.dll` is built from llama.cpp sources. Its Hexagon SDK content is the
   FastRPC stub that `qaic` generates from llama.cpp's `htp_iface.idl`, plus the SDK headers
-  the stub includes: `rpcmem.h` and `AEEStdErr.h` are BSD-3-Clause, and `remote.h` is
-  marked Qualcomm proprietary and contributes declarations. The DLL links only `ggml-base`
+  the host code includes: `rpcmem.h`, `AEEStdErr.h` and `AEEStdDef.h` are BSD-3-Clause
+  (packages carry their notices), and `remote.h` and `dspqueue.h` are marked Qualcomm
+  proprietary and contribute declarations only. The DLL links only `ggml-base`
   and Windows libraries; FastRPC (`libcdsprpc.dll`) comes from the device driver. Upstream
   llama.cpp publishes binaries built this way (`bin-android-arm64-snapdragon`,
   `bin-linux-arm64-snapdragon`), though none for Windows.
@@ -172,7 +176,6 @@ under `lib\llama_cpp`:
 
 ## Open
 
-- Packaging with the clang/MSVC-ABI build, and a memory budget per HTP version (3000 MiB
-  is v73's).
+- A memory budget per HTP version (3000 MiB is v73's).
 - Moving llama.cpp past b11644 waits for a signed HTP set built from the new commit; the
   `x/hexagon` test fails until `Pinned` names one.

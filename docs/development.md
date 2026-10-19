@@ -123,9 +123,9 @@ Ninja, Windows SDK `10.0.26100.0` headers and the official
 The tested `llvm-mingw-20261006-ucrt-aarch64.zip` asset has SHA256
 `9a835d5179c9f3a5a783c11a7f14062a249b4765dd11add64a66786864e82ab2`.
 Verify the downloaded archive before extracting or executing its tools. No local
-CGo wrapper, Python, converter, Visual Studio environment setup or prebuilt native
-payload is required. Network access is needed for pinned source/modules/license
-tool dependencies on the first build.
+CGo wrapper, Python, converter or prebuilt native payload is required, and Visual
+Studio is needed only for the optional Hexagon backend (below). Network access is
+needed for pinned source/modules/license tool dependencies on the first build.
 
 ```powershell
 .\scripts\build_npu_windows.ps1 `
@@ -136,6 +136,18 @@ tool dependencies on the first build.
     -BuildDirectory C:\build\ollama-npu-arm64 `
     -OutputDirectory C:\packages\ollama-npu
 ```
+
+`-HexagonSDKRoot C:\path\to\Hexagon_SDK\6.6.0.0` also builds llama.cpp's Hexagon NPU
+backend, which runs GGUF models on the Snapdragon NPU once enabled with
+`OLLAMA_HEXAGON=1` (see [npu_hexagon.md](npu_hexagon.md)). That needs Visual Studio's
+ARM64 C++ tools and its clang (`-VisualStudioRoot`; default: the newest found by
+vswhere). The backend builds in Visual Studio's ARM64 environment with clang targeting
+the MSVC ABI, as upstream builds its Windows ARM64 CUDA backend beside the LLVM-MinGW
+CPU payload, and reaches `ggml-base` only through its C API. Its build directory is
+`<BuildDirectory>-hexagon`. It installs `lib\ollama\hexagon\ggml-hexagon.dll` with its
+Visual C++ runtime, plus `licenses\Hexagon-SDK-headers.txt` for the BSD-licensed SDK
+headers compiled into it. The package never contains Qualcomm's signed NPU libraries:
+`ollama npu setup --provider hexagon --accept-qualcomm-terms` downloads them.
 
 The build directory must be new or empty; cached development builds are refused.
 The script scopes/restores compiler variables, disables external Go workspaces
