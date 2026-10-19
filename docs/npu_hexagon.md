@@ -233,6 +233,11 @@ under `lib\llama_cpp`:
 - Models above about 4 GiB: layer-splitting across virtual sessions
   (`GGML_HEXAGON_DEVICES=2`) avoids weight remapping, but the fork has not been tried
   with more than one HTP device.
+- CPU prefill: the spike's single CPU backend built with Visual Studio's clang (MSVC ABI,
+  armv8.7 with fp16) prefilled about 1.5x faster than the package's LLVM-MinGW variants
+  (Qwen2.5-1.5B: 828 vs 556 tok/s) and decoded 10-15% slower. fp16 is not the cause; the
+  toolchain or ABI probably is. Building the CPU variants in Visual Studio's environment, as
+  the Hexagon backend is, has not been tried.
 - One of about 19 two-turn chats with Phi-4-mini (split 20/33 between NPU and CPU under
   the former budget) returned unrelated words for the second turn; it did not recur in
   later runs, split or whole.
