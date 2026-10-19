@@ -35,7 +35,7 @@
       "binaryDir": "${sourceDir}/../../build/llama-server-cpu_arm64",
       "toolchainFile": "${sourceDir}/../../cmake/windows-arm64-llvm-mingw.cmake",
       "cacheVariables": {
-        "GGML_CPU_ALL_VARIANTS": "OFF",
+        "GGML_CPU_ALL_VARIANTS": "ON",
         "OLLAMA_RUNNER_DIR": "",
         "OLLAMA_WINDOWS_RUNTIME_ARCH": "arm64"
       }

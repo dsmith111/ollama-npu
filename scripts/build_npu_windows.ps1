@@ -304,7 +304,8 @@ try {
         $dependencies += [ordered]@{ file = $binary.FullName.Substring($stage.Length + 1); imports = $imports }
     }
     foreach ($required in @("ollama.exe", "lib\ollama\llama-server.exe", "lib\ollama\llama-quantize.exe",
-        "lib\ollama\llama-perplexity.exe", "lib\ollama\ggml-cpu.dll", "lib\ollama\GO_LICENSE",
+        "lib\ollama\llama-perplexity.exe", "lib\ollama\ggml-cpu-windows_armv8.0_1.dll",
+        "lib\ollama\ggml-cpu-windows_armv8.6_1.dll", "lib\ollama\GO_LICENSE",
         "lib\ollama\LLAMA_CPP_VENDORS_LICENSE") + @(if ($hexagon) {
             "lib\ollama\hexagon\ggml-hexagon.dll", "licenses\Hexagon-SDK-headers.txt", "docs\npu_hexagon.md" })) {
         if (-not (Test-Path -LiteralPath (Join-Path $stage $required) -PathType Leaf)) { throw "Missing package file: $required" }
@@ -335,7 +336,7 @@ try {
         cmake = $cmakeVersion[0]
         windows_sdk = Split-Path -Leaf $sdk
         llama_cpp_pin = (Get-Content -LiteralPath (Join-Path $source "LLAMA_CPP_VERSION") -Raw).Trim()
-        native_profile = "cpu_arm64; GGML_NATIVE=OFF; GGML_CPU_ALL_VARIANTS=OFF"
+        native_profile = "cpu_arm64; GGML_NATIVE=OFF; GGML_CPU_ALL_VARIANTS=ON (windows_armv8.0_1 to windows_armv8.6_1, chosen at load)"
         hexagon = $hexagon
         package_scope = "unsigned portable CLI/server; no desktop app, model, ORT/QNN runtime, Qualcomm signed HTP libraries or OEM driver"
         hardware_qualified = $false
