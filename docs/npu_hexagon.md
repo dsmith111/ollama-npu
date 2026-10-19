@@ -94,6 +94,10 @@ and KV cache plus llama-server's 1 GiB fit margin), the runner also passes `--po
 llama-server's CPU threads sleep instead of polling between ops. A model split with the CPU
 keeps the default polling: its CPU layers decoded 28% slower without it.
 
+`ollama ps` names the NPU: `100% NPU` for a model whole on it, `25%/75% CPU/NPU` for a split.
+`/api/ps` adds `"accelerator": "NPU"` when every device a runner uses is a Hexagon NPU, and
+`size_vram` is then the NPU's share. QNN bundles (the ORT runner) do not report it yet.
+
 ## Measured (X1E78100, Qwen2.5-1.5B-Instruct)
 
 Through `/api/generate` (556-token prompt, 128 tokens):

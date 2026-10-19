@@ -2846,6 +2846,7 @@ func (s *Server) PsHandler(c *gin.Context) {
 			Name:          displayName,
 			Size:          v.size,
 			SizeVRAM:      v.sizeVRAM,
+			Accelerator:   v.accelerator,
 			Digest:        digest,
 			Details:       modelDetails,
 			ExpiresAt:     v.expiresAt,

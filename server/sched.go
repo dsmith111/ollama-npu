@@ -1907,8 +1907,23 @@ type loadedModel struct {
 	runner        string
 	size          int64
 	sizeVRAM      int64
+	accelerator   string
 	contextLength int
 	expiresAt     time.Time
+}
+
+// deviceAccelerator names the kind of device holding a runner's offloaded
+// weights when it is not a GPU: "NPU" when every device is a Hexagon NPU.
+func deviceAccelerator(gpus []ml.DeviceID) string {
+	if len(gpus) == 0 {
+		return ""
+	}
+	for _, id := range gpus {
+		if !strings.EqualFold(id.Library, "Hexagon") {
+			return ""
+		}
+	}
+	return "NPU"
 }
 
 // loadedModels returns a snapshot of the currently loaded models for status
@@ -1932,11 +1947,12 @@ func (s *Scheduler) loadedModels() []loadedModel {
 			continue
 		}
 		lm := loadedModel{
-			model:     r.model,
-			runner:    r.runner,
-			size:      int64(r.totalSize),
-			sizeVRAM:  int64(r.vramSize),
-			expiresAt: r.expiresAt,
+			model:       r.model,
+			runner:      r.runner,
+			size:        int64(r.totalSize),
+			sizeVRAM:    int64(r.vramSize),
+			accelerator: deviceAccelerator(r.gpus),
+			expiresAt:   r.expiresAt,
 		}
 		if r.llama != nil {
 			lm.contextLength = r.llama.ContextLength()

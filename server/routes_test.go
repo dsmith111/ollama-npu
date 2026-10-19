@@ -31,6 +31,7 @@ import (
 	"github.com/ollama/ollama/fs/gguf"
 	gguftest "github.com/ollama/ollama/internal/testutil/gguf"
 	"github.com/ollama/ollama/manifest"
+	"github.com/ollama/ollama/ml"
 	"github.com/ollama/ollama/openai"
 	"github.com/ollama/ollama/types/model"
 	"github.com/ollama/ollama/version"
@@ -590,6 +591,37 @@ func TestPsHandlerUsesRunningManifestAndRunner(t *testing.T) {
 	}
 	if resp.Models[0].Runner != manifest.RunnerMLX {
 		t.Fatalf("runner = %q, want %q", resp.Models[0].Runner, manifest.RunnerMLX)
+	}
+}
+
+func TestPsHandlerNamesTheNPU(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for library, want := range map[string]string{"Hexagon": "NPU", "CUDA": ""} {
+		s := Server{sched: &Scheduler{loaded: map[string]*runnerRef{
+			"test": {
+				model:           &Model{ShortName: "test-model:latest", Digest: strings.Repeat("b", 64)},
+				runner:          manifest.RunnerLlamaCPP,
+				gpus:            []ml.DeviceID{{ID: "0", Library: library}},
+				totalSize:       1024,
+				vramSize:        1024,
+				expiresAt:       time.Now().Add(time.Hour),
+				sessionDuration: time.Hour,
+			},
+		}}}
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/ps", nil)
+		s.PsHandler(c)
+
+		var resp api.ProcessResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Models) != 1 || resp.Models[0].Accelerator != want {
+			t.Fatalf("%s: models = %+v, want accelerator %q", library, resp.Models, want)
+		}
 	}
 }
 

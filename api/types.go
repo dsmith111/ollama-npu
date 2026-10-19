@@ -948,6 +948,7 @@ type ProcessModelResponse struct {
 	Details       ModelDetails `json:"details,omitempty"`
 	ExpiresAt     time.Time    `json:"expires_at"`
 	SizeVRAM      int64        `json:"size_vram"`
+	Accelerator   string       `json:"accelerator,omitempty"` // device kind holding SizeVRAM when not a GPU, such as "NPU"
 	ContextLength int          `json:"context_length"`
 	Runner        string       `json:"runner,omitempty"`
 }
