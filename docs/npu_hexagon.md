@@ -80,8 +80,12 @@ directory. It looks for the signed set in `OLLAMA_HEXAGON_PATH`, then `lib\ollam
 fallback to a later directory. The runner then sets:
 
 - `ADSP_LIBRARY_PATH` to that directory, so FastRPC finds the NPU libraries;
-- `GGML_HEXAGON_MBUF=,,3000M` unless set: the backend otherwise reports 0 MiB, and
-  discovery drops zero-memory devices. 3000 MiB is the buffer address space of HTP v73.
+- `GGML_HEXAGON_MBUF=,,5120M` unless set: the backend otherwise reports 0 MiB, and
+  discovery drops zero-memory devices. The total is only reported to the schedulers, not
+  enforced. An NPU session maps about 3.5 GiB at a time on every HTP version, and the
+  backend maps weights in and out for larger models. 5120 MiB is that window plus the
+  1 GiB that llama-server's fit keeps free, so models up to about 4 GiB load whole on
+  the NPU (see the budget measurements below).
 
 Flash attention is allowed on Hexagon (`--flash-attn auto`); turning it off halves NPU
 prefill.
@@ -114,11 +118,49 @@ The portable package (LLVM-MinGW CPU payload plus the MSVC-ABI Hexagon backend),
 from its extracted ZIP with the set from setup:
 
 - Qwen2.5-1.5B Q4_0 loaded all 29 layers on HTP0 (898 MiB) and decoded 24 tokens at
-  about 39 tok/s; the package's CPU-only build ran it at about 67 tok/s.
+  about 39 tok/s.
 - `npu-model` converted Qwen2.5-0.5B with the package's own `llama-quantize` and
   verified it with its `llama-server` and `llama-perplexity`: 25/25 layers on HTP0,
   perplexity 1.16x the 16-bit model, long-prompt retrieval correct at 875 and 1,763
   tokens, and the chat template matching transformers'.
+- Nine models from 0.36B to 3.8B parameters (Qwen2.5, Qwen3, SmolLM2, TinyLlama,
+  DeepSeek-R1-Distill-Qwen, Phi-3.5-mini, Phi-4-mini) were converted with `npu-model`,
+  installed and chatted with through the package; the converter's `docs/models.md` has
+  the table.
+
+### CPU backend
+
+The package's CPU backend comes in variants picked at load from the features Windows
+reports (`llama/compat/002-windows-arm64-cpu-variants.patch`); the X1E78100 gets dotprod
+and i8mm. The previous generic ARMv8 build, measured against it through `/api/generate`
+(a prompt of about 540 tokens, 128 tokens, median of three):
+
+| Model (Q4_0, `num_gpu 0`) | Generic ARMv8 | Variants (dotprod, i8mm) |
+|---|---|---|
+| Qwen2.5-0.5B-Instruct | 377 / 146 tok/s | 1,483 / 157 tok/s |
+| Qwen2.5-1.5B-Instruct | 85 / 38 tok/s | 559 / 68 tok/s |
+| Qwen3-1.7B | 79 / 40 tok/s | 443 / 50 tok/s |
+
+(prefill / decode). The variants leave out fp16 vector arithmetic: with it, ggml
+accumulates F16 dot products in fp16, and DeepSeek-R1-Distill-Qwen-1.5B decoded garbage
+on the CPU ("Okay,8888..."), while dotprod and i8mm alone were as fast.
+
+### Memory budget
+
+`GGML_HEXAGON_MBUF`'s total decides, through llama-server's fit (which keeps 1 GiB free),
+how much of a model the fork places on the NPU; a model that does not fit is split with
+the CPU. Splits were the slowest option. Through `/api/generate` (prefill / decode,
+first token):
+
+| Model, size at 4K context | 3000 MiB (former default) | 5120 MiB (default) |
+|---|---|---|
+| Phi-4-mini-instruct Q4_0, 2.8 GiB | split 20/33 layers: 384 / 9.0 tok/s, 1.42 s | whole: 713 / 12.8 tok/s, 0.78 s |
+| Phi-3.5-mini-instruct Q4_0, 3.6 GiB | split: 279 / 8.9 tok/s, 2.26 s | whole: 491 / 9.7 tok/s, 1.32 s |
+
+Beyond the session window it still runs, more slowly: with an 8K context and a 6000 MiB
+budget, Phi-3.5-mini put 4.7 GiB on the NPU, answered a 618-token retrieval prompt
+correctly at 7.5 tok/s, and decoded at 2.3 tok/s after a 5,176-token prompt. Models up to
+Qwen3-1.7B (1.5 GiB) loaded whole under either budget.
 
 ## Redistribution
 
@@ -186,6 +228,13 @@ under `lib\llama_cpp`:
 
 ## Open
 
-- A memory budget per HTP version (3000 MiB is v73's).
+- The memory budget was measured on HTP v73 only. The ~3.5 GiB session window is the same
+  on every version per llama.cpp's docs, but v75-v81 devices have not been checked.
+- Models above about 4 GiB: layer-splitting across virtual sessions
+  (`GGML_HEXAGON_DEVICES=2`) avoids weight remapping, but the fork has not been tried
+  with more than one HTP device.
+- One of about 19 two-turn chats with Phi-4-mini (split 20/33 between NPU and CPU under
+  the former budget) returned unrelated words for the second turn; it did not recur in
+  later runs, split or whole.
 - Moving llama.cpp past b11644 waits for a signed HTP set built from the new commit; the
   `x/hexagon` test fails until `Pinned` names one.
