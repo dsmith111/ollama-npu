@@ -82,6 +82,7 @@ type StatusResponse struct {
 	Status                int    `json:"status"`
 	Progress              int    `json:"progress"`
 	Memory                uint64 `json:"memory,omitempty"`
+	NPUMemory             uint64 `json:"npu_memory,omitempty"` // the part of Memory the QNN stages hold
 	ContextLength         int    `json:"context_length"`
 	PromptPaddingMultiple int    `json:"prompt_padding_multiple,omitempty"`
 	Provider              string `json:"provider"`

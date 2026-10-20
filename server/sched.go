@@ -1959,6 +1959,10 @@ func (s *Scheduler) loadedModels() []loadedModel {
 			total, vram := r.llama.MemorySize()
 			lm.size = int64(total)
 			lm.sizeVRAM = int64(vram)
+			// Runners without GPU devices, such as ORT GenAI on QNN, name their own.
+			if named, ok := r.llama.(interface{ Accelerator() string }); ok && lm.accelerator == "" {
+				lm.accelerator = named.Accelerator()
+			}
 		}
 		// The scheduler waits to set expiresAt, so a model that is still
 		// loading may have the zero value. Estimate expiration from the

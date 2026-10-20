@@ -146,6 +146,31 @@ func TestHTTPChatTemplateRendersMessages(t *testing.T) {
 	}
 }
 
+func TestModelMemorySplitsQNNFromCPUStages(t *testing.T) {
+	dir := t.TempDir()
+	for name, size := range map[string]int{
+		"embeddings.onnx": 10, "lm_head.onnx": 20, "lm_head.onnx.data": 7,
+		"context_ctx.onnx": 5, "context_ctx_qnn.bin": 100, "tokenizer.json": 1000,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	qnn := map[string]map[string]json.RawMessage{"qnn": {}}
+	meta := modelMetadata{stages: []modelStage{
+		{name: "decoder", primary: true},
+		{name: "embeddings", filename: "embeddings.onnx"},
+		{name: "context", filename: "context_ctx.onnx", providers: qnn},
+		{name: "lm_head", filename: "lm_head.onnx"},
+	}}
+	if total, npu := modelMemory(dir, meta, "qnn"); total != 142 || npu != 105 {
+		t.Fatalf("qnn model memory = %d, %d; want 142 total with 105 on the NPU", total, npu)
+	}
+	if total, npu := modelMemory(dir, meta, "cpu"); total != 142 || npu != 0 {
+		t.Fatalf("cpu model memory = %d, %d; want 142 total and none on the NPU", total, npu)
+	}
+}
+
 func TestReadChatTemplate(t *testing.T) {
 	dir := t.TempDir()
 	if template, err := readChatTemplate(dir); err != nil || template != "" {

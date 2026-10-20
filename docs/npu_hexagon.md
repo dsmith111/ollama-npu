@@ -96,7 +96,9 @@ keeps the default polling: its CPU layers decoded 28% slower without it.
 
 `ollama ps` names the NPU: `100% NPU` for a model whole on it, `25%/75% CPU/NPU` for a split.
 `/api/ps` adds `"accelerator": "NPU"` when every device a runner uses is a Hexagon NPU, and
-`size_vram` is then the NPU's share. QNN bundles (the ORT runner) do not report it yet.
+`size_vram` is then the NPU's share. QNN bundles report it too: the ORT runner sizes the
+model from its graphs, data and context binaries, and the QNN stages' share is the NPU's
+(Qwen2.5-0.5B w8a16: 983 MB, `24%/76% CPU/NPU`, its embeddings and LM head on the CPU).
 
 ## Measured (X1E78100, Qwen2.5-1.5B-Instruct)
 

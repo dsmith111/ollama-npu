@@ -44,6 +44,7 @@ type Client struct {
 	token         string
 	contextLength atomic.Int64
 	memory        atomic.Uint64
+	npuMemory     atomic.Uint64
 	done          chan struct{}
 	doneErr       error // written before done is closed
 	client        *http.Client
@@ -224,6 +225,9 @@ func startClient(ctx context.Context, opts ClientOptions, cmd *exec.Cmd) (*Clien
 		c.port = event.Port
 		c.contextLength.Store(int64(event.ContextLength))
 		c.memory.Store(event.Memory)
+		if event.Provider == "qnn" && event.NPUMemory <= event.Memory {
+			c.npuMemory.Store(event.NPUMemory)
+		}
 		err = c.Ping(startCtx)
 	}
 	if err != nil {
@@ -630,7 +634,19 @@ func (c *Client) GetPort() int                                   { return c.port
 func (c *Client) ModelPath() string                              { return c.modelDir }
 func (c *Client) ContextLength() int                             { return int(c.contextLength.Load()) }
 func (c *Client) VRAMByGPU(ml.DeviceID) uint64                   { return 0 }
-func (c *Client) MemorySize() (uint64, uint64)                   { return c.memory.Load(), 0 }
+
+// MemorySize reports the model's size and the part its QNN stages hold on the
+// NPU (zero for the CPU and DirectML providers). The runner has no GPU
+// devices, so the scheduler only reports these.
+func (c *Client) MemorySize() (uint64, uint64) { return c.memory.Load(), c.npuMemory.Load() }
+
+// Accelerator names the device kind MemorySize's second value is on.
+func (c *Client) Accelerator() string {
+	if c.npuMemory.Load() > 0 {
+		return "NPU"
+	}
+	return ""
+}
 
 func (c *Client) HasExited() bool {
 	select {

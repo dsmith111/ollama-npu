@@ -625,6 +625,36 @@ func TestPsHandlerNamesTheNPU(t *testing.T) {
 	}
 }
 
+// acceleratedLlm is a runner without GPU devices that names its own accelerator (ORT GenAI on QNN).
+type acceleratedLlm struct{ *mockLlm }
+
+func (acceleratedLlm) Accelerator() string { return "NPU" }
+
+func TestPsHandlerTakesTheAcceleratorARunnerNames(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := Server{sched: &Scheduler{loaded: map[string]*runnerRef{
+		"test": {
+			model:           &Model{ShortName: "qnn-model:latest", Digest: strings.Repeat("b", 64)},
+			runner:          manifest.RunnerORTGenAI,
+			llama:           acceleratedLlm{&mockLlm{totalSize: 1000, vramSize: 750}},
+			expiresAt:       time.Now().Add(time.Hour),
+			sessionDuration: time.Hour,
+		},
+	}}}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/ps", nil)
+	s.PsHandler(c)
+
+	var resp api.ProcessResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Models) != 1 || resp.Models[0].Accelerator != "NPU" || resp.Models[0].SizeVRAM != 750 {
+		t.Fatalf("models = %+v, want 750 of 1000 bytes on the NPU", resp.Models)
+	}
+}
+
 func TestNormalizeRunner(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -32,6 +32,43 @@ type Runner struct {
 	status                StatusResponse
 }
 
+// modelMemory sizes a model for status reporting: its ONNX graphs, external data
+// and compiled context binaries. With the QNN provider, everything but the
+// CPU stages' graphs and data is the NPU's share: the compiled contexts and the
+// stages that wrap them.
+func modelMemory(dir string, meta modelMetadata, provider string) (total, npu uint64) {
+	size := func(name string) uint64 {
+		info, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(name)))
+		if err != nil || !info.Mode().IsRegular() {
+			return 0
+		}
+		return uint64(info.Size())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0
+	}
+	for _, entry := range entries {
+		name := strings.ToLower(entry.Name())
+		if strings.HasSuffix(name, ".onnx") || strings.HasSuffix(name, ".bin") || strings.Contains(name, ".onnx.data") {
+			total += size(entry.Name())
+		}
+	}
+	if provider != "qnn" {
+		return total, 0
+	}
+	var cpu uint64
+	for _, stage := range meta.stages {
+		if stage.filename != "" && stage.providers["qnn"] == nil {
+			cpu += size(stage.filename) + size(stage.filename+".data")
+		}
+	}
+	if cpu > total {
+		return total, 0
+	}
+	return total, total - cpu
+}
+
 // maxChatTemplateBytes bounds chat_template.jinja (the largest known templates
 // are tens of kilobytes).
 const maxChatTemplateBytes = 1 << 20
@@ -151,9 +188,11 @@ func (r *Runner) Load(modelDir string) error {
 	r.vocabSize = meta.vocabSize
 	r.promptPaddingMultiple = meta.promptPaddingMultiple
 	r.stateMu.Lock()
+	memory, npuMemory := modelMemory(modelDir, meta, plan.name)
 	r.status = StatusResponse{
 		ProtocolVersion: ProtocolVersion,
 		Status:          0, Progress: 100, ContextLength: meta.contextLength,
+		Memory: memory, NPUMemory: npuMemory,
 		PromptPaddingMultiple: meta.promptPaddingMultiple,
 		Provider:              plan.name, ProviderState: plan.state,
 		NativeCancelAvailable: oga.NativeCancellationAvailable(),
