@@ -203,6 +203,11 @@ mapped (3.7 GB of memory was available before the load) and once with 6.2 GiB. T
 is probably the memory Windows can lock for the NPU, so it would vary with the machine and
 its load; 6144 MiB keeps whole models at 5 GiB or less, below every failure.
 
+One of about 19 two-turn chats with Phi-4-mini, split 20/33 under the 3000 MiB budget,
+once returned unrelated words for the second turn. It did not recur in 100 more on
+2026-10-20, each after a fresh load (50 whole on the NPU, 50 split 20/33): every one
+answered "Paris" and "Berlin".
+
 ## Redistribution
 
 - The signed set is a Qualcomm release asset: GenieX v0.9.1 on GitHub
@@ -278,8 +283,5 @@ under `lib\llama_cpp`:
   (Qwen2.5-1.5B: 828 vs 556 tok/s) and decoded 10-15% slower. fp16 is not the cause; the
   toolchain or ABI probably is. Building the CPU variants in Visual Studio's environment, as
   the Hexagon backend is, has not been tried.
-- One of about 19 two-turn chats with Phi-4-mini (split 20/33 between NPU and CPU under
-  the former budget) returned unrelated words for the second turn; it did not recur in
-  later runs, split or whole.
 - Moving llama.cpp past b11644 waits for a signed HTP set built from the new commit; the
   `x/hexagon` test fails until `Pinned` names one.
