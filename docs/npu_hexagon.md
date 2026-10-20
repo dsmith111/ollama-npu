@@ -30,6 +30,31 @@ Hexagon NPU support disabled`, so GGUF models run on the CPU. With it, discovery
 keeps a model on the CPU. If no verified set is found, discovery logs `Hexagon NPU
 libraries unavailable` with the setup command and offers only the other devices.
 
+## Models from ollama.com
+
+Nothing needs converting for the models ollama.com already serves. With the switch on, the
+fork pulls them as usual and loads them whole on the NPU, and `ollama ps` shows "100% NPU".
+Measured 2026-10-20 on the X1E78100 with package `cd2eb656994e`, from an isolated model
+store, a 120-token answer at temperature 0:
+
+| Tag | Type | `ollama ps` | Decode |
+|---|---|---|---|
+| `qwen2.5:1.5b` (default tag) | Q4_K_M | 1.3 GB, 100% NPU | 29.6 tok/s |
+| `qwen2.5:1.5b-instruct-q4_0` | Q4_0 | 1.1 GB, 100% NPU | not timed |
+| `llama3.2:3b` (default tag) | Q4_K_M | 2.8 GB, 100% NPU | 15.5 tok/s |
+| `llama3.2:3b-instruct-q4_0` | Q4_0 | 2.5 GB, 100% NPU | 20.6 tok/s |
+| `phi4-mini` (default tag) | Q4_K_M | 3.3 GB, 100% NPU | 12.8 tok/s |
+
+All answered a two-turn capital-cities chat correctly. The backend runs Q4_0, Q8_0, Q4_K,
+Q5_K and Q6_K matmuls on HTP, so the default tags (Q4_K_M) work as well as the `-q4_0` ones.
+Prefer a `-q4_0` tag when the library has one: Q4_0 is the backend's best-supported type and
+decoded about a third faster here, and phi4-mini's default tag processed its short prompt at
+79 tok/s against 266-477 for the others. Models up to about 5 GiB load whole (see "Memory
+budget"); larger ones are split with the CPU, which is slower. Converting a Hugging Face
+model yourself is for models the library does not have, or for a Q4_0 of one that only has
+K-quant tags: [Temperum](https://github.com/dsmith111/temperum) does that, and its
+Llama-3.2-3B bundle decoded at 21.1 tok/s, the same as the library's `-q4_0` tag.
+
 ## Why b11644 and signed libraries
 
 The Hexagon backend has two halves: `ggml-hexagon.dll` on the CPU, and HTP ops libraries
@@ -140,12 +165,12 @@ from its extracted ZIP with the set from setup:
 
 - Qwen2.5-1.5B Q4_0 loaded all 29 layers on HTP0 (898 MiB) and decoded 24 tokens at
   about 39 tok/s.
-- `npu-model` converted Qwen2.5-0.5B with the package's own `llama-quantize` and
+- `temperum` converted Qwen2.5-0.5B with the package's own `llama-quantize` and
   verified it with its `llama-server` and `llama-perplexity`: 25/25 layers on HTP0,
   perplexity 1.16x the 16-bit model, long-prompt retrieval correct at 875 and 1,763
   tokens, and the chat template matching transformers'.
 - Nine models from 0.36B to 3.8B parameters (Qwen2.5, Qwen3, SmolLM2, TinyLlama,
-  DeepSeek-R1-Distill-Qwen, Phi-3.5-mini, Phi-4-mini) were converted with `npu-model`,
+  DeepSeek-R1-Distill-Qwen, Phi-3.5-mini, Phi-4-mini) were converted with `temperum`,
   installed and chatted with through the package; the converter's `docs/models.md` has
   the table.
 

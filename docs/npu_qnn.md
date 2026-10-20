@@ -174,7 +174,7 @@ changes only two config options relative to this traced local bundle.
 The converter now has an explicit local engineering workflow:
 `acquire-prebuilt` -> `prepare-prebuilt --profile phi3-mini-4k-qnn` ->
 `import-ollama`. See the
-[converter consumer instructions](https://github.com/dsmith111/ollama-npu-model-converter#prepared-phi-3-mini-4k-engineering-profile)
+[converter consumer instructions](https://github.com/dsmith111/temperum#prepared-phi-3-mini-4k-engineering-profile)
 when that source checkpoint is available; until then these converter changes
 remain local to the workspace, not a published package promise.
 

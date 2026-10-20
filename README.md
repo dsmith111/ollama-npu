@@ -152,11 +152,25 @@ console.log(response.message.content);
 
 ## Snapdragon NPU support in this fork
 
-This fork adds an experimental ORT GenAI/QNN runner for compatible prepared
-models on Windows ARM64 Snapdragon systems. See [setup and model support](docs/npu_qnn.md).
-The upstream download/install commands above install stock Ollama, not this
-fork. NPU support is model/runtime-specific; arbitrary GGUF, Intel/AMD NPUs,
-tools and structured output are not certified by importing an ONNX bundle.
+On a Snapdragon X laptop this fork runs GGUF models on the Hexagon NPU through llama.cpp's
+Hexagon backend, and ONNX Runtime GenAI/QNN bundles through a separate runner. Stock models
+from ollama.com need no conversion: with the NPU switch on, `ollama run llama3.2` loads the
+model whole on the NPU and `ollama ps` shows "100% NPU". A model generating on the NPU leaves
+the CPU almost idle, so an assistant or agent can run beside your own work. Enabling it takes
+three commands (the first downloads Qualcomm's signed NPU libraries after showing their terms):
+
+```
+ollama npu setup --provider hexagon --accept-qualcomm-terms
+set OLLAMA_HEXAGON=1
+ollama serve
+```
+
+[GGUF on the NPU](docs/npu_hexagon.md) lists the ollama.com models measured, what to pull,
+and the memory budget; [QNN bundles](docs/npu_qnn.md) covers the ONNX route. To convert a
+Hugging Face model the library does not have, use [Temperum](https://github.com/dsmith111/temperum).
+The upstream download/install commands above install stock Ollama, not this fork; the fork
+has no published release yet, so build its portable package as described in
+[docs/development.md](docs/development.md).
 
 ## Community Integrations
 
