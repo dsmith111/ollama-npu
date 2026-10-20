@@ -88,6 +88,19 @@ select the native assets. It must contain matching ARM64 libraries and their
 required dependencies. Do not copy random DLLs from Edge, Office, another
 machine, or an unrelated vendor package.
 
+The pinned runtime is the last of Microsoft's combined QNN packages the fork
+qualified. Their successors come in three packages: Microsoft.ML.OnnxRuntimeGenAI
+0.18.0, Microsoft.ML.OnnxRuntime 1.31.0 and Qualcomm's QNN plugin execution
+provider, Qualcomm.ML.OnnxRuntime.QNN 2.7.0. Measured on 2026-10-20 (X1E78100,
+Qwen2.5-0.5B w8a16, bundle compiled for the pinned runtime), that stack ran the
+bundle correctly but slower: 36.8 tok/s decode with the runner at 9.3 CPU cores,
+against 87.5 tok/s at 1.6 cores on the pinned runtime. NuGet's `onnxruntime.dll`
+1.31.0 for Windows ARM64 ran the bundle's CPU stages about half as fast as the
+PyPI build of the same version. With the PyPI build, each pipeline stage's
+default thread pool spun while the NPU worked (81 tok/s at 9.7 cores, or about
+50 tok/s at 1-1.6 cores with spinning off). The fork stays on the pinned runtime
+until a newer one matches it.
+
 ## Importing a model
 
 Acquire a model that is explicitly prepared for the desired execution provider
