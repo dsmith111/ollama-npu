@@ -22,6 +22,13 @@ type CompletionOptions struct {
 	Stop              []string `json:"stop,omitempty"`
 }
 
+// ChatTemplateMessage is one message for the runner to render with the model's
+// own chat template (POST /v1/chat_template).
+type ChatTemplateMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 type TextCompletionsRequest struct {
 	Prompt    string            `json:"prompt"`
 	Options   CompletionOptions `json:"options,omitempty"`

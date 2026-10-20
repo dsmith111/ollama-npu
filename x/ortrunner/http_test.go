@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -35,6 +37,9 @@ func (b *fakeServerBackend) Detokenize(ctx context.Context, tokens []int32) (str
 		return b.detokenize(ctx, tokens)
 	}
 	return "decoded", nil
+}
+func (b *fakeServerBackend) ApplyChatTemplate(_ context.Context, messages string) (string, error) {
+	return "rendered:" + messages, nil
 }
 func (b *fakeServerBackend) Status() StatusResponse {
 	return StatusResponse{Status: 0, Progress: 100, ContextLength: 4096, Provider: "cpu", ProviderState: "portable-cpu", WatchdogRequired: true}
@@ -97,6 +102,12 @@ func TestHTTPStrictRequests(t *testing.T) {
 		{"/v1/detokenize", `{"tokens":null}`, 400},
 		{"/v1/detokenize", `{}`, 400},
 		{"/v1/detokenize", `{"tokens":[]}`, 200},
+		{"/v1/chat_template", `{"messages":[{"role":"user","content":"hi"}]}`, 200},
+		{"/v1/chat_template", `{"messages":[]}`, 400},
+		{"/v1/chat_template", `{}`, 400},
+		{"/v1/chat_template", `{"messages":[{"role":"tool","content":"hi"}]}`, 400},
+		{"/v1/chat_template", `{"messages":[{"role":"user","content":"a\u0000b"}]}`, 400},
+		{"/v1/chat_template", `{"messages":[{"role":"user","content":"hi"}],"tools":[]}`, 400},
 		{"/load", `{"model":"ignored"}`, 400},
 		{"/load", `{}`, 200},
 		{"/completion", `{"prompt":"` + strings.Repeat("x", maxRequestBytes) + `"}`, 413},
@@ -116,6 +127,44 @@ func TestHTTPStrictRequests(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnsupportedMediaType {
 		t.Fatal(rec.Code)
+	}
+}
+
+func TestHTTPChatTemplateRendersMessages(t *testing.T) {
+	handler := testService(t, &fakeServerBackend{}, 4).handler("")
+	rec := requestHandler(handler, "POST", "/v1/chat_template",
+		`{"messages":[{"role":"system","content":"be \"brief\""},{"role":"user","content":"hi"}]}`, "")
+	var body struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s err=%v", rec.Code, rec.Body.String(), err)
+	}
+	// The backend receives the messages re-encoded as a JSON array.
+	if want := `rendered:[{"role":"system","content":"be \"brief\""},{"role":"user","content":"hi"}]`; body.Prompt != want {
+		t.Fatalf("prompt = %s, want %s", body.Prompt, want)
+	}
+}
+
+func TestReadChatTemplate(t *testing.T) {
+	dir := t.TempDir()
+	if template, err := readChatTemplate(dir); err != nil || template != "" {
+		t.Fatalf("missing chat_template.jinja = %q, %v; want empty", template, err)
+	}
+	path := filepath.Join(dir, "chat_template.jinja")
+	if err := os.WriteFile(path, []byte("{{ messages }}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if template, err := readChatTemplate(dir); err != nil || template != "{{ messages }}" {
+		t.Fatalf("chat_template.jinja = %q, %v", template, err)
+	}
+	for _, bad := range [][]byte{[]byte("a\x00b"), []byte("\xff"), make([]byte, maxChatTemplateBytes+1)} {
+		if err := os.WriteFile(path, bad, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readChatTemplate(dir); err == nil {
+			t.Fatalf("accepted an invalid chat template of %d bytes", len(bad))
+		}
 	}
 }
 

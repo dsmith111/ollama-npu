@@ -88,6 +88,38 @@ func (t *Tokenizer) Decode(tokens []int32) (string, error) {
 	return result, nil
 }
 
+// ApplyChatTemplate renders messages, a JSON array of {"role", "content"}
+// objects, with a Jinja chat template, or with the tokenizer config's own when
+// template is empty, ending with the assistant's generation prompt.
+func (t *Tokenizer) ApplyChatTemplate(template, messages string) (string, error) {
+	if t == nil || t.ctx == nil {
+		return "", fmt.Errorf("ort genai: tokenizer is closed")
+	}
+	if C.OgaHasChatTemplates() == 0 {
+		return "", fmt.Errorf("ort genai: this runtime cannot render chat templates")
+	}
+	if strings.ContainsRune(template, 0) || strings.ContainsRune(messages, 0) {
+		return "", fmt.Errorf("ort genai: chat template input contains NUL")
+	}
+	var cTemplate *C.char
+	if template != "" {
+		cTemplate = C.CString(template)
+		defer C.free(unsafe.Pointer(cTemplate))
+	}
+	cMessages := C.CString(messages)
+	defer C.free(unsafe.Pointer(cMessages))
+	var out *C.char
+	if err := ogaError(C.OgaTokenizerApplyChatTemplate(t.ctx, cTemplate, cMessages, nil, C.bool(true), &out)); err != nil {
+		return "", err
+	}
+	result := C.GoString(out)
+	C.OgaDestroyString(out)
+	if !utf8.ValidString(result) {
+		return "", fmt.Errorf("ort genai: chat template rendered invalid UTF-8")
+	}
+	return result, nil
+}
+
 // Close frees the tokenizer.
 func (t *Tokenizer) Close() {
 	if t.ctx != nil {

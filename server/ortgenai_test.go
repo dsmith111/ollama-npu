@@ -144,8 +144,16 @@ func TestORTGenAIPackageRoundTrip(t *testing.T) {
 	if _, err := GetModel(copied.String()); err != nil {
 		t.Fatal(err)
 	}
+	if !m.HasChatTemplate || chatModeForModel(m) != chatExecutionModeNative {
+		t.Fatal("an ORT model with its own chat template and no Ollama template must be rendered by its runner")
+	}
+	m.HasGoTemplate = true
 	if chatModeForModel(m) != chatExecutionModeRendered {
-		t.Fatal("ORT chat must use the rendered completion path")
+		t.Fatal("an ORT model with an Ollama template must use the rendered completion path")
+	}
+	m.HasGoTemplate, m.HasChatTemplate = false, false
+	if chatModeForModel(m) != chatExecutionModeRendered {
+		t.Fatal("an ORT model without a chat template must use the rendered completion path")
 	}
 }
 

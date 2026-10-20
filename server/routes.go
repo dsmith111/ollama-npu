@@ -2928,7 +2928,9 @@ const (
 )
 
 func chatModeForModel(m *Model) chatExecutionMode {
-	if m.IsMLX() || m.IsORTGenAI() || os.Getenv("OLLAMA_ONNX_MODEL") != "" || usesOllamaRenderedChat(m) {
+	// An ORT GenAI model without an Ollama template is rendered by its runner
+	// with the model's own chat template, when it has one.
+	if m.IsMLX() || (m.IsORTGenAI() && !m.HasChatTemplate) || os.Getenv("OLLAMA_ONNX_MODEL") != "" || usesOllamaRenderedChat(m) {
 		return chatExecutionModeRendered
 	}
 

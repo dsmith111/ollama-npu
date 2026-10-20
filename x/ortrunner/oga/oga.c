@@ -59,6 +59,7 @@ const char* (*OgaResultGetError_)(const OgaResult* result) = NULL;
 void (*OgaDestroyResult_)(OgaResult* result) = NULL;
 void (*OgaDestroyString_)(const char* str) = NULL;
 void (*OgaShutdown_)(void) = NULL;
+OgaResult* (*OgaTokenizerApplyChatTemplate_)(const OgaTokenizer* tokenizer, const char* template_str, const char* messages, const char* tools, bool add_generation_prompt, const char** out_string) = NULL;
 
 int oga_dynamic_load_symbols(oga_dynamic_handle handle) {
     // Config
@@ -118,6 +119,7 @@ int oga_dynamic_load_symbols(oga_dynamic_handle handle) {
     CHECK_LOAD(handle, OgaDestroyResult);
     CHECK_LOAD(handle, OgaDestroyString);
     CHECK_LOAD(handle, OgaShutdown);
+    *(void**)(&OgaTokenizerApplyChatTemplate_) = DLSYM(handle, "OgaTokenizerApplyChatTemplate");
 
     return 0;
 }

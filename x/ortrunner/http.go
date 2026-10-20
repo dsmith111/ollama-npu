@@ -30,6 +30,7 @@ type serverBackend interface {
 	Generate(context.Context, Request) error
 	Tokenize(context.Context, string) ([]int32, error)
 	Detokenize(context.Context, []int32) (string, error)
+	ApplyChatTemplate(context.Context, string) (string, error)
 	Status() StatusResponse
 }
 
@@ -195,6 +196,37 @@ func (s *runnerService) handler(token string) http.Handler {
 	}
 	mux.HandleFunc("POST /v1/detokenize", detokenize)
 	mux.HandleFunc("POST /detokenize", detokenize)
+	mux.HandleFunc("POST /v1/chat_template", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []ChatTemplateMessage `json:"messages"`
+		}
+		if !decodeRequest(w, r, &body, false, "messages") {
+			return
+		}
+		if len(body.Messages) == 0 {
+			writeHTTPError(w, http.StatusBadRequest, "messages must not be empty")
+			return
+		}
+		for _, message := range body.Messages {
+			if message.Role != "system" && message.Role != "user" && message.Role != "assistant" {
+				writeHTTPError(w, http.StatusBadRequest, "message roles must be system, user or assistant")
+				return
+			}
+			if strings.ContainsRune(message.Content, 0) || !utf8.ValidString(message.Content) {
+				writeHTTPError(w, http.StatusBadRequest, "message content must be UTF-8 without NUL")
+				return
+			}
+		}
+		messages, err := json.Marshal(body.Messages)
+		if err != nil {
+			writeHTTPError(w, http.StatusBadRequest, "invalid messages")
+			return
+		}
+		s.operation(w, r, "chat_template", func(ctx context.Context) (any, error) {
+			prompt, err := s.backend.ApplyChatTemplate(ctx, string(messages))
+			return map[string]string{"prompt": prompt}, err
+		})
+	})
 	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		var body struct{}
 		if !decodeRequest(w, r, &body, true) {

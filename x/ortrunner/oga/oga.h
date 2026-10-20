@@ -141,6 +141,12 @@ static inline void OgaDestroyString(const char* str) { OgaDestroyString_(str); }
 extern void (*OgaShutdown_)(void);
 static inline void OgaShutdown(void) { OgaShutdown_(); }
 
+// Optional: renders a chat template with the model's tokenizer (Jinja through
+// ONNX Runtime Extensions' minja engine).
+extern OgaResult* (*OgaTokenizerApplyChatTemplate_)(const OgaTokenizer* tokenizer, const char* template_str, const char* messages, const char* tools, bool add_generation_prompt, const char** out_string);
+static inline int OgaHasChatTemplates(void) { return OgaTokenizerApplyChatTemplate_ != 0; }
+static inline OgaResult* OgaTokenizerApplyChatTemplate(const OgaTokenizer* tokenizer, const char* template_str, const char* messages, const char* tools, bool add_generation_prompt, const char** out_string) { return OgaTokenizerApplyChatTemplate_(tokenizer, template_str, messages, tools, add_generation_prompt, out_string); }
+
 // Symbol loader — called after dlopen/LoadLibrary
 int oga_dynamic_load_symbols(oga_dynamic_handle handle);
 

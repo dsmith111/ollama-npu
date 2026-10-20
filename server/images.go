@@ -908,8 +908,30 @@ func modelFromManifest(n model.Name, mf *manifest.Manifest) (*Model, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read ORT compatibility: %w", err)
 		}
+		m.HasChatTemplate = ortHasChatTemplate(modelDir)
 	}
 	return m, nil
+}
+
+// ortHasChatTemplate reports whether an ORT GenAI model carries its own chat
+// template, which the runner renders through GenAI: chat_template.jinja or a
+// tokenizer config's chat_template string.
+func ortHasChatTemplate(dir string) bool {
+	if info, err := os.Stat(filepath.Join(dir, "chat_template.jinja")); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+		return true
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "tokenizer_config.json"))
+	if err != nil {
+		return false
+	}
+	var config struct {
+		ChatTemplate any `json:"chat_template"`
+	}
+	if json.Unmarshal(data, &config) != nil {
+		return false
+	}
+	template, ok := config.ChatTemplate.(string)
+	return ok && template != ""
 }
 
 // CopyModel copies src to dst, returning a warning when a manifest list is

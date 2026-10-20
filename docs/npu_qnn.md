@@ -115,8 +115,13 @@ FROM .\model
 ```
 
 Add the model's correct Ollama `TEMPLATE`, parameters and stop strings when
-needed. A `chat_template.jinja` bundled as a model asset is not automatically an
-Ollama Go template. Do not guess role tokens.
+needed. Do not guess role tokens. Without a `TEMPLATE`, the runner renders chats
+with the model's own Jinja template, `chat_template.jinja` or else its
+`tokenizer_config.json` `chat_template`, through GenAI's
+`OgaTokenizerApplyChatTemplate` (the minja engine from ONNX Runtime Extensions).
+Tools and images are refused there: these models are text-only. Checked with
+Qwen2.5-0.5B (QNN, w8a16): the rendering matched its Ollama template for a
+default-system and a two-turn conversation, and both chat turns were answered.
 
 ```powershell
 .\ollama.exe create my-model:qnn -f .\Modelfile

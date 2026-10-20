@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/ollama/ollama/x/ortrunner/oga"
 	ortruntime "github.com/ollama/ollama/x/ortrunner/runtime"
@@ -27,7 +28,35 @@ type Runner struct {
 	modelType             string
 	vocabSize             int
 	promptPaddingMultiple int
+	chatTemplate          string // chat_template.jinja; empty uses the tokenizer config's
 	status                StatusResponse
+}
+
+// maxChatTemplateBytes bounds chat_template.jinja (the largest known templates
+// are tens of kilobytes).
+const maxChatTemplateBytes = 1 << 20
+
+// readChatTemplate returns the model's chat_template.jinja, or "" without one.
+func readChatTemplate(modelDir string) (string, error) {
+	path := filepath.Join(modelDir, "chat_template.jinja")
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxChatTemplateBytes {
+		return "", fmt.Errorf("chat_template.jinja must be a regular file of at most %d bytes", maxChatTemplateBytes)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if !utf8.Valid(data) || strings.ContainsRune(string(data), 0) {
+		return "", fmt.Errorf("chat_template.jinja must be UTF-8 without NUL")
+	}
+	return string(data), nil
 }
 
 // Load loads the ORT GenAI model from a directory.
@@ -38,6 +67,10 @@ func (r *Runner) Load(modelDir string) error {
 		return fmt.Errorf("a model is already loaded")
 	}
 	meta, err := readModelMetadata(modelDir)
+	if err != nil {
+		return err
+	}
+	chatTemplate, err := readChatTemplate(modelDir)
 	if err != nil {
 		return err
 	}
@@ -112,6 +145,7 @@ func (r *Runner) Load(modelDir string) error {
 		return classifyLoadError(err, plan.name)
 	}
 	r.model, r.tokenizer, r.config = model, tok, cfg
+	r.chatTemplate = chatTemplate
 	r.modelDir, r.contextLength, r.eosTokens = modelDir, meta.contextLength, meta.eosTokens
 	r.modelType = meta.modelType
 	r.vocabSize = meta.vocabSize
@@ -350,6 +384,20 @@ func (r *Runner) Tokenize(ctx context.Context, text string) ([]int32, error) {
 		}
 	}
 	return tokens, err
+}
+
+// ApplyChatTemplate renders a JSON message list with the model's own chat
+// template, ending with the assistant's generation prompt.
+func (r *Runner) ApplyChatTemplate(ctx context.Context, messages string) (string, error) {
+	r.nativeMu.Lock()
+	defer r.nativeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if r.tokenizer == nil {
+		return "", fmt.Errorf("model is not loaded")
+	}
+	return r.tokenizer.ApplyChatTemplate(r.chatTemplate, messages)
 }
 
 func (r *Runner) Detokenize(ctx context.Context, tokens []int32) (string, error) {

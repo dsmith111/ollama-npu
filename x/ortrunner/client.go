@@ -500,12 +500,43 @@ func readCompletionStream(reader io.Reader, fn func(llm.CompletionResponse)) err
 	return fmt.Errorf("ORT stream ended without a terminal response: %w", io.ErrUnexpectedEOF)
 }
 
-func (c *Client) Chat(context.Context, llm.ChatRequest, func(llm.ChatResponse)) error {
-	return errors.New("ORT GenAI requires Ollama-rendered chat")
+// Chat renders the conversation with the model's own chat template in the
+// runner, then completes it. ORT GenAI models are text-only.
+func (c *Client) Chat(ctx context.Context, req llm.ChatRequest, fn func(llm.ChatResponse)) error {
+	prompt, err := c.ApplyChatTemplate(ctx, req)
+	if err != nil {
+		return err
+	}
+	return c.Completion(ctx, llm.CompletionRequest{
+		Prompt: prompt, Format: req.Format, Options: req.Options, Shift: req.Shift,
+		Logprobs: req.Logprobs, TopLogprobs: req.TopLogprobs,
+	}, func(r llm.CompletionResponse) {
+		fn(llm.ChatResponse{
+			Message: api.Message{Role: "assistant", Content: r.Content}, DoneReason: r.DoneReason, Done: r.Done,
+			PromptEvalCount: r.PromptEvalCount, PromptEvalDuration: r.PromptEvalDuration,
+			EvalCount: r.EvalCount, EvalDuration: r.EvalDuration,
+		})
+	})
 }
 
-func (c *Client) ApplyChatTemplate(context.Context, llm.ChatRequest) (string, error) {
-	return "", errors.New("ORT GenAI requires an Ollama chat template")
+// ApplyChatTemplate renders the conversation with the model's own chat template
+// (chat_template.jinja, else its tokenizer config's) through GenAI in the runner.
+func (c *Client) ApplyChatTemplate(ctx context.Context, req llm.ChatRequest) (string, error) {
+	if len(req.Tools) > 0 {
+		return "", errors.New("ORT GenAI models do not support tools")
+	}
+	messages := make([]ChatTemplateMessage, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		if len(message.Images) > 0 || len(message.ToolCalls) > 0 || message.Role == "tool" {
+			return "", errors.New("ORT GenAI models take text messages only")
+		}
+		messages = append(messages, ChatTemplateMessage{Role: message.Role, Content: message.Content})
+	}
+	var output struct {
+		Prompt string `json:"prompt"`
+	}
+	err := c.operation(ctx, "/v1/chat_template", map[string][]ChatTemplateMessage{"messages": messages}, &output)
+	return output.Prompt, err
 }
 
 func (c *Client) Ping(ctx context.Context) error {
