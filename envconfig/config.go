@@ -232,6 +232,8 @@ var (
 	UseAuth = Bool("OLLAMA_AUTH")
 	// EnableVulkan controls Vulkan backend discovery.
 	EnableVulkan = BoolWithDefault("OLLAMA_VULKAN")
+	// EnableHexagon enables the experimental Hexagon NPU backend on Snapdragon.
+	EnableHexagon = Bool("OLLAMA_HEXAGON")
 	// EnableIntegratedGPU controls whether integrated GPUs may be selected.
 	EnableIntegratedGPU = BoolWithDefault("OLLAMA_IGPU_ENABLE")
 	// NoCloudEnv checks the OLLAMA_NO_CLOUD environment variable.
@@ -361,6 +363,7 @@ func AsMap() map[string]EnvVar {
 		ret["GPU_DEVICE_ORDINAL"] = EnvVar{"GPU_DEVICE_ORDINAL", GpuDeviceOrdinal(), "Set which AMD devices are visible by numeric ID"}
 		ret["HSA_OVERRIDE_GFX_VERSION"] = EnvVar{"HSA_OVERRIDE_GFX_VERSION", HsaOverrideGfxVersion(), "Override the gfx used for all detected AMD GPUs"}
 		ret["OLLAMA_VULKAN"] = EnvVar{"OLLAMA_VULKAN", EnableVulkan(true), "Enable Vulkan support"}
+		ret["OLLAMA_HEXAGON"] = EnvVar{"OLLAMA_HEXAGON", EnableHexagon(), "Enable experimental Hexagon NPU support"}
 	}
 
 	return ret
