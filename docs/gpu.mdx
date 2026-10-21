@@ -189,13 +189,18 @@ on the NPU, and Windows loads it only when a trusted catalog signs it. Qualcomm 
 Microsoft-signed set in its [GenieX](https://github.com/qualcomm/GenieX/releases) releases,
 built from one llama.cpp commit. The set must come from the same commit as the backend
 (`LLAMA_CPP_VERSION`), and Qualcomm's terms restrict its use, so Ollama does not ship it.
-Put the six files from the GenieX SDK archive (`lib/llama_cpp`) in a directory and point
-`OLLAMA_HEXAGON_PATH` at it, or put them in `lib/ollama/hexagon` beside the backend. Ollama
-checks the files against pinned hashes before a runner uses them and refuses a changed set.
+`ollama npu setup` shows Qualcomm's terms and, with `--accept-qualcomm-terms`, downloads the
+release archive, checks it and the six files against pinned hashes, and installs them, with a
+manifest of their origin, licence and terms, into a per-user directory
+(`%LOCALAPPDATA%\Ollama\runtimes\hexagon-htp`).
+`--dir` installs elsewhere (then point `OLLAMA_HEXAGON_PATH` at that directory),
+`--package-dir` uses an archive downloaded beforehand, and `--validate-only` checks the set
+runners would use. A set put in place by hand works the same way through `OLLAMA_HEXAGON_PATH`
+or `lib/ollama/hexagon` beside the backend. Ollama refuses a changed set.
 
 ```powershell
+ollama npu setup --accept-qualcomm-terms
 $env:OLLAMA_HEXAGON = "1"
-$env:OLLAMA_HEXAGON_PATH = "C:\path\to\geniex\lib\llama_cpp"
 ollama serve
 ```
 
