@@ -362,7 +362,17 @@ try {
     $status = @(& git status --porcelain --untracked-files=normal)
     if ($LASTEXITCODE -ne 0) { throw "Cannot inspect source worktree" }
     $dirty = $status.Count -gt 0
-    if ($dirty -and -not $AllowDirty) { throw "Refusing to package a dirty checkout; commit changes or use -AllowDirty for development only" }
+    if ($dirty -and -not $AllowDirty) {
+        # Untracked files count too: anything in the tree could be compiled or embedded into the package.
+        $shown = @($status | Select-Object -First 10)
+        $more = if ($status.Count -gt $shown.Count) { "`n  ... and $($status.Count - $shown.Count) more" } else { "" }
+        throw @"
+The checkout has uncommitted changes or untracked files, which could end up in the package:
+  $($shown -join "`n  ")$more
+Commit or remove them, build from a fresh clone (git clone -b npu/hexagon-spike https://github.com/dsmith111/ollama-npu),
+or pass -AllowDirty for a development build, whose version then ends in ".dirty".
+"@
+    }
     if (-not $Version) { $Version = "0.0.0-npu.dev.$($revision.Substring(0, 12))" }
     if ($dirty) { $Version += ".dirty" }
     $name = "ollama-npu-windows-arm64-$Version"
