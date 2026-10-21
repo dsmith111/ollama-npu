@@ -7,8 +7,9 @@
 // trusted catalog signs it. Qualcomm publishes a Microsoft-signed set in its
 // GenieX releases, built from one llama.cpp commit; the set must come from the
 // same commit as the host backend. Its terms attach use restrictions to it, so
-// Ollama does not ship the set: the user puts it in place and this package
-// checks every file against pinned hashes before a runner loads it.
+// Ollama does not ship the set: `ollama npu setup` downloads it from Qualcomm's
+// release into a per-user directory, and this package checks every file
+// against pinned hashes before a runner loads it.
 package hexagon
 
 import (
@@ -31,11 +32,24 @@ const PathEnv = "OLLAMA_HEXAGON_PATH"
 // catalogFilename marks a directory that holds, or claims to hold, a set.
 const catalogFilename = "libggml-htp.cat"
 
+// ManifestFilename records where an installed set came from, its licence and
+// the terms that apply to it.
+const ManifestFilename = "ollama_hexagon.json"
+
+// Terms are the conditions Qualcomm attaches to the set beyond its BSD-3
+// licence: its site terms bring in its Responsible AI License, which restricts
+// how the libraries may be used.
+var Terms = []string{
+	"https://www.qualcomm.com/site/terms-of-use",
+	"https://www.qualcomm.com/site/responsible-ai-license",
+}
+
 // Release pins a signed set and the archive it comes from.
 type Release struct {
 	Source        string // who publishes the set
 	LlamaCppTag   string // llama.cpp tag the set was built from; must match LLAMA_CPP_VERSION
 	URL           string
+	License       string // the set's licence (the release archives omit the file)
 	ArchiveName   string
 	ArchiveSize   int64
 	ArchiveSHA256 string
@@ -49,6 +63,7 @@ var Pinned = Release{
 	Source:        "Qualcomm GenieX v0.9.1",
 	LlamaCppTag:   "b11644",
 	URL:           "https://github.com/qualcomm/GenieX/releases/download/v0.9.1/geniex-sdk-windows-arm64-v0.9.1.zip",
+	License:       "BSD-3-Clause, https://github.com/qualcomm/GenieX/blob/v0.9.1/LICENSE",
 	ArchiveName:   "geniex-sdk-windows-arm64-v0.9.1.zip",
 	ArchiveSize:   91542153,
 	ArchiveSHA256: "2ed2bf63f042086c525b442081ed8d7ad4ff76bcce8bad6eeabe1cf38cc0a1b5",
@@ -72,11 +87,29 @@ func (r Release) names() []string {
 	return names
 }
 
+// InstallDir is where `ollama npu setup` puts the pinned set: a versioned
+// per-user directory. It is empty where setup is unsupported.
+func InstallDir() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	base := os.Getenv("LOCALAPPDATA")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		base = filepath.Join(home, "AppData", "Local")
+	}
+	return filepath.Join(base, "Ollama", "runtimes", "hexagon-htp", "win-arm64", Pinned.LlamaCppTag)
+}
+
 // SearchDirs lists where runners look for the set: OLLAMA_HEXAGON_PATH, then
-// the backend's own directory (a local build may bundle the set there).
+// the backend's own directory (a local build may bundle the set there), then
+// InstallDir.
 func SearchDirs(backendDir string) []string {
 	dirs := filepath.SplitList(os.Getenv(PathEnv))
-	dirs = append(dirs, backendDir)
+	dirs = append(dirs, backendDir, InstallDir())
 	var out []string
 	seen := make(map[string]bool)
 	for _, dir := range dirs {
@@ -97,8 +130,8 @@ func SearchDirs(backendDir string) []string {
 }
 
 // ErrNotInstalled reports that no search directory holds a set.
-var ErrNotInstalled = errors.New("the signed Hexagon NPU libraries were not found; set " + PathEnv +
-	" to the directory holding Qualcomm's GenieX set (libggml-htp-v*.so and libggml-htp.cat)")
+var ErrNotInstalled = errors.New("the signed Hexagon NPU libraries are not installed; run 'ollama npu setup --accept-qualcomm-terms' or set " +
+	PathEnv + " to a directory holding them")
 
 // VerifiedDir returns the first directory holding a set, checked against
 // Pinned. It refuses an invalid candidate instead of falling back to another.

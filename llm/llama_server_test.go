@@ -1394,6 +1394,7 @@ func TestSetupLlamaServerCommandEnvHexagon(t *testing.T) {
 	original := hexagon.Pinned
 	hexagon.Pinned = pinned
 	t.Cleanup(func() { hexagon.Pinned = original })
+	t.Setenv("LOCALAPPDATA", t.TempDir()) // no set from `ollama npu setup`
 	t.Setenv(hexagon.PathEnv, "")
 
 	adspEnv := func(gpuLibs ...string) (string, bool) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -91,12 +92,17 @@ func TestValidateWantsEveryPinnedFile(t *testing.T) {
 func TestSearchDirsOrder(t *testing.T) {
 	first, second, backend := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv(PathEnv, strings.Join([]string{first, second, first, ""}, string(os.PathListSeparator)))
+	t.Setenv("LOCALAPPDATA", filepath.Join(t.TempDir(), "local"))
 	want := []string{first, second, backend}
+	if runtime.GOOS == "windows" {
+		want = append(want, filepath.Join(os.Getenv("LOCALAPPDATA"), "Ollama", "runtimes", "hexagon-htp", "win-arm64",
+			Pinned.LlamaCppTag))
+	}
 	if got := SearchDirs(backend); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("SearchDirs = %v, want %v", got, want)
 	}
 	t.Setenv(PathEnv, "")
-	if got := SearchDirs(backend); len(got) != 1 || got[0] != backend {
-		t.Fatalf("SearchDirs without %s = %v, want only the backend directory", PathEnv, got)
+	if got := SearchDirs(backend); got[0] != backend || len(got) != len(want)-2 {
+		t.Fatalf("SearchDirs without %s = %v, want the backend directory then the setup directory", PathEnv, got)
 	}
 }
