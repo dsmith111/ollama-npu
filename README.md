@@ -155,7 +155,8 @@ console.log(response.message.content);
 On a Snapdragon X laptop this fork runs GGUF models on the Hexagon NPU through llama.cpp's
 Hexagon backend, and ONNX Runtime GenAI/QNN bundles through a separate runner. Stock models
 from ollama.com need no conversion: with the NPU switch on, `ollama run llama3.2` loads the
-model whole on the NPU and `ollama ps` shows "100% NPU". A model generating on the NPU leaves
+model whole on the NPU and `ollama ps` shows "100% NPU", and so do models others converted
+with Temperum and shared there, such as `ollama run dsmith111/qwen2.5-0.5b-instruct:npu`. A model generating on the NPU leaves
 the CPU almost idle, so an assistant or agent can run beside your own work. Enabling it takes
 three commands (the first downloads Qualcomm's signed NPU libraries after showing their terms):
 

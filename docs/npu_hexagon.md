@@ -55,6 +55,15 @@ model yourself is for models the library does not have, or for a Q4_0 of one tha
 K-quant tags: [Temperum](https://github.com/dsmith111/temperum) does that, and its
 Llama-3.2-3B bundle decoded at 21.1 tok/s, the same as the library's `-q4_0` tag.
 
+Models converted with Temperum and uploaded to ollama.com pull the same way. The first one,
+`dsmith111/qwen2.5-0.5b-instruct:npu` (Qwen2.5-0.5B at Q4_0 with its checked chat template),
+pulled into a fresh store in 9 s and ran whole on the NPU: 80.8 tok/s decode, 0.16 cores busy
+while generating.
+
+```
+ollama run dsmith111/qwen2.5-0.5b-instruct:npu
+```
+
 ## Why b11644 and signed libraries
 
 The Hexagon backend has two halves: `ggml-hexagon.dll` on the CPU, and HTP ops libraries
