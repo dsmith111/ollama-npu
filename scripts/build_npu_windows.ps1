@@ -317,6 +317,7 @@ try {
         $toolsInfo = @($sdkInfo.root.tools.info | Where-Object { $_.name -eq "Hexagon Tools" })
         if ($toolsInfo.Count -ne 1) { throw "hexagon_sdk.json in $hexagonSdk does not name its Hexagon Tools" }
         $hexagonTools = Join-Path $hexagonSdk $toolsInfo[0].path
+        $vsInstaller = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer"
         if (-not $VisualStudioRoot) {
             $VisualStudioRoot = Find-VisualStudio "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
             if (-not $VisualStudioRoot) { throw $VSHelp }
