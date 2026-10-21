@@ -25,6 +25,15 @@ intentionally skipped so a developer can iterate on a local llama.cpp tree.
   small tensor repacking primitives.
 - `001-llama-cpp-hooks.patch` - small additive call-site edits in llama.cpp files.
   It currently touches `src/llama-model-loader.cpp` and `tools/mtmd/clip.cpp`.
+- `002-windows-arm64-cpu-variants.patch` - a build-only edit, not part of the
+  compat layer: it adds Windows on Arm to `GGML_CPU_ALL_VARIANTS` in
+  `ggml/src/CMakeLists.txt`. llama.cpp already detects the CPU features on
+  Windows (`IsProcessorFeaturePresent` in `ggml-feats.h`) but lists variants
+  only for Linux, Android and Apple. Unlike the Android list it leaves out
+  fp16 vector arithmetic, with which ggml accumulates F16 dot products in
+  fp16: DeepSeek-R1-Distill-Qwen-1.5B then decoded garbage on the CPU, and
+  dotprod+i8mm alone was as fast. Drop the patch once llama.cpp lists Windows
+  variants.
 - `compat.cmake` - CMake glue that invokes the shared
   `cmake/apply-git-patches.cmake` idempotent applier (used by
   `llama/server/CMakeLists.txt`) for every `*.patch` under

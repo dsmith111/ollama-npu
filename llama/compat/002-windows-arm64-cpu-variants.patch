@@ -1,0 +1,19 @@
+diff --git a/ggml/src/CMakeLists.txt b/ggml/src/CMakeLists.txt
+index fe001a0..78049db 100644
+--- a/ggml/src/CMakeLists.txt
++++ b/ggml/src/CMakeLists.txt
+@@ -544,6 +544,14 @@ if (GGML_CPU_ALL_VARIANTS)
+             ggml_add_cpu_backend_variant(apple_m1             DOTPROD)
+             ggml_add_cpu_backend_variant(apple_m2_m3          DOTPROD MATMUL_INT8)
+             ggml_add_cpu_backend_variant(apple_m4             DOTPROD MATMUL_INT8 NOSVE SME)
++        elseif (WIN32)
++            # Windows on Arm: ggml-feats.h probes these with IsProcessorFeaturePresent.
++            # No FP16_VECTOR_ARITHMETIC: ggml then accumulates F16 dot products (the KV
++            # cache) in fp16, which overflows for some models (DeepSeek-R1-Distill-Qwen-1.5B
++            # decodes garbage), and dotprod+i8mm alone measured as fast.
++            ggml_add_cpu_backend_variant(windows_armv8.0_1)
++            ggml_add_cpu_backend_variant(windows_armv8.2_1    DOTPROD)
++            ggml_add_cpu_backend_variant(windows_armv8.6_1    DOTPROD MATMUL_INT8)
+         else()
+             message(FATAL_ERROR "Unsupported ARM target OS: ${CMAKE_SYSTEM_NAME}")
+         endif()
