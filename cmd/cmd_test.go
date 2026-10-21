@@ -704,6 +704,41 @@ func TestListRunningHandlerShowsRunner(t *testing.T) {
 	}
 }
 
+func TestListRunningHandlerNamesTheNPU(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		model := func(name string, size, vram int64) api.ProcessModelResponse {
+			return api.ProcessModelResponse{
+				Name: name, Model: name, Digest: strings.Repeat("a", 64), Size: size, SizeVRAM: vram,
+				Accelerator: "NPU", ContextLength: 4096, Runner: "llamacpp", ExpiresAt: time.Now().Add(time.Hour),
+			}
+		}
+		if err := json.NewEncoder(w).Encode(api.ProcessResponse{
+			Models: []api.ProcessModelResponse{model("whole:latest", 1000, 1000), model("split:latest", 1000, 750)},
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}))
+	t.Setenv("OLLAMA_HOST", mockServer.URL)
+	t.Cleanup(mockServer.Close)
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(t.Context())
+
+	var err error
+	got := captureStdout(t, func() {
+		err = ListRunningHandler(cmd, nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"100% NPU", "25%/75% CPU/NPU"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRunHandlerRunnerFlag(t *testing.T) {
 	showReqCh := make(chan api.ShowRequest, 1)
 	generateReqCh := make(chan api.GenerateRequest, 1)

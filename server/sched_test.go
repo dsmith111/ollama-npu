@@ -2301,3 +2301,25 @@ func TestSchedulerTracksMultipleLoadedRunners(t *testing.T) {
 	expectedFree := uint64(24*format.GigaByte) - uint64(8*format.GigaByte) - uint64(4*format.GigaByte)
 	require.Equal(t, expectedFree, gpus[0].FreeMemory)
 }
+
+func TestDeviceAcceleratorNamesTheNPU(t *testing.T) {
+	npu := ml.DeviceID{ID: "HTP0", Library: "Hexagon"}
+	gpu := ml.DeviceID{ID: "GPU-0", Library: "CUDA"}
+	tests := []struct {
+		name string
+		gpus []ml.DeviceID
+		want string
+	}{
+		{"no devices", nil, ""},
+		{"one NPU", []ml.DeviceID{npu}, "NPU"},
+		{"a GPU", []ml.DeviceID{gpu}, ""},
+		{"NPU beside a GPU", []ml.DeviceID{gpu, npu}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := deviceAccelerator(tt.gpus); got != tt.want {
+				t.Fatalf("deviceAccelerator = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
