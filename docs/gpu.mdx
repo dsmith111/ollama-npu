@@ -174,3 +174,33 @@ On mixed iGPU/dGPU systems where the Vulkan iGPU is unstable, keep Vulkan
 enabled and set `GGML_VK_VISIBLE_DEVICES` to the discrete GPU index. For
 example, use `GGML_VK_VISIBLE_DEVICES=1` when `Vulkan1` is the discrete
 GPU.
+
+## Qualcomm Hexagon NPU (experimental)
+
+On Windows on Snapdragon X laptops Ollama can run GGUF models on the Hexagon NPU through
+llama.cpp's Hexagon backend. The backend is experimental and off by default: start the
+server with `OLLAMA_HEXAGON=1`. Models then load whole on the NPU when they fit (about 5 GiB
+at the default budget) and `ollama ps` shows `100% NPU`. A model generating on the NPU leaves
+the CPU nearly idle, which matters most when an assistant or agent runs beside your own work.
+
+The backend has two halves. The host half, `ggml-hexagon.dll`, is built with Ollama. The NPU
+half (`libggml-htp-v73.so` to `libggml-htp-v81.so` with the catalog `libggml-htp.cat`) runs
+on the NPU, and Windows loads it only when a trusted catalog signs it. Qualcomm publishes a
+Microsoft-signed set in its [GenieX](https://github.com/qualcomm/GenieX/releases) releases,
+built from one llama.cpp commit. The set must come from the same commit as the backend
+(`LLAMA_CPP_VERSION`), and Qualcomm's terms restrict its use, so Ollama does not ship it.
+Put the six files from the GenieX SDK archive (`lib/llama_cpp`) in a directory and point
+`OLLAMA_HEXAGON_PATH` at it, or put them in `lib/ollama/hexagon` beside the backend. Ollama
+checks the files against pinned hashes before a runner uses them and refuses a changed set.
+
+```powershell
+$env:OLLAMA_HEXAGON = "1"
+$env:OLLAMA_HEXAGON_PATH = "C:\path\to\geniex\lib\llama_cpp"
+ollama serve
+```
+
+`GGML_HEXAGON_MBUF` sets the NPU memory the backend reports (default `,,6144M`). The backend
+does not enforce it, but every buffer a model uses stays mapped, so a model must fit whole in
+what the NPU can map; `num_gpu 0` keeps a model on the CPU. Context shift is disabled while
+layers sit on the NPU, so an answer stops at `num_ctx` instead. Q4_0 and Q8_0 are the
+best-supported quantizations; Q4_K, Q5_K and Q6_K matmuls also run on the NPU.
