@@ -751,6 +751,31 @@ func (launch llamaServerLaunchConfig) runsWholeOnHexagon() bool {
 	return launch.predictedVRAM+hexagonFitMargin <= total
 }
 
+// usesHexagon reports whether a Hexagon NPU is among the selected devices and
+// layers may be placed on it.
+func (launch llamaServerLaunchConfig) usesHexagon() bool {
+	if len(launch.gpus) == 0 || launch.opts.NumGPU == 0 {
+		return false
+	}
+	for _, gpu := range launch.gpus {
+		if strings.EqualFold(gpu.Library, "Hexagon") {
+			return true
+		}
+	}
+	return false
+}
+
+// contextShiftAllowed reports whether llama-server may shift the context when
+// a conversation outgrows num_ctx. The shift re-applies RoPE to the cached
+// keys, which llama.cpp's Hexagon backend cannot run on a buffer that lives on
+// the NPU: ggml-backend aborts ("pre-allocated tensor (cache_k_l0 (view)) in a
+// buffer (HTP0) that cannot run the operation (ROPE)") and the request fails
+// with HTTP 500. Without the shift the runner stops an answer at the context
+// limit (stop type "limit") and refuses a prompt that does not fit.
+func contextShiftAllowed(launch llamaServerLaunchConfig) bool {
+	return !launch.usesHexagon()
+}
+
 func appendMainGPUArgs(params []string, opts api.Options) []string {
 	if opts.MainGPU == nil {
 		return params
@@ -1060,6 +1085,10 @@ func NewLlamaServerRunner(
 		gpuLibs:       slices.Clone(gpuLibs),
 		extraEnvs:     cloneStringMap(serverEnvs),
 		predictedVRAM: PredictServerVRAM(modelPath, f, opts.NumCtx*numParallel),
+	}
+	if launch.config.ContextShift && !contextShiftAllowed(launch) {
+		slog.Info("context shift disabled: the Hexagon NPU cannot shift a KV cache it holds; answers stop at num_ctx")
+		launch.config.ContextShift = false
 	}
 
 	s := &llamaServerRunner{

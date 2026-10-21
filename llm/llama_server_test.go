@@ -2127,6 +2127,35 @@ func TestAppendHexagonPollArgs(t *testing.T) {
 	}
 }
 
+// Context shift re-applies RoPE to cached keys, which the Hexagon backend cannot run on the NPU
+// (the runner aborted). It is allowed only when no layer can land on a Hexagon device.
+func TestContextShiftAllowedOnlyWithoutHexagonLayers(t *testing.T) {
+	npu := ml.DeviceInfo{DeviceID: ml.DeviceID{Library: "Hexagon"}, TotalMemory: 5 << 30}
+	gpu := ml.DeviceInfo{DeviceID: ml.DeviceID{Library: "CUDA"}, TotalMemory: 24 << 30}
+	auto := api.Options{Runner: api.Runner{NumGPU: -1}}
+	tests := []struct {
+		name string
+		gpus []ml.DeviceInfo
+		opts api.Options
+		want bool
+	}{
+		{"whole on the NPU", []ml.DeviceInfo{npu}, auto, false},
+		{"split with the CPU", []ml.DeviceInfo{npu}, api.Options{Runner: api.Runner{NumGPU: 10}}, false},
+		{"NPU present but CPU only", []ml.DeviceInfo{npu}, api.Options{Runner: api.Runner{NumGPU: 0}}, true},
+		{"NPU beside a GPU", []ml.DeviceInfo{gpu, npu}, auto, false},
+		{"no NPU", nil, auto, true},
+		{"another GPU", []ml.DeviceInfo{gpu}, auto, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launch := llamaServerLaunchConfig{gpus: tt.gpus, opts: tt.opts, modelLayers: 29}
+			if got := contextShiftAllowed(launch); got != tt.want {
+				t.Fatalf("contextShiftAllowed = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAppendFlashAttentionArgs(t *testing.T) {
 	supportedGPU := []ml.DeviceInfo{{DeviceID: ml.DeviceID{Library: "CUDA"}, DriverMajor: 13, ComputeMajor: 8, ComputeMinor: 9}}
 	oldGPU := []ml.DeviceInfo{

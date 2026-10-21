@@ -276,6 +276,17 @@ and 3-5x at the 95th percentile, the all-cores unit takes 2.7x longer, 5.5-5.8 c
 in the runner, and the model itself slows too (17.3 and 33.7 tok/s alone, 10.2 and 21.3
 beside the probes): both sides lose.
 
+### Context shift
+
+llama-server's context shift drops the oldest tokens when a conversation outgrows `num_ctx` and
+re-applies RoPE to the cached keys. The Hexagon backend cannot run that operation on a buffer that
+lives on the NPU, and ggml aborts the runner (`pre-allocated tensor (cache_k_l0 (view)) in a buffer
+(HTP0) that cannot run the operation (ROPE)`), so the request failed with HTTP 500. Found 2026-10-21
+with a 0.23B model that never ends its answers: it filled its 2048-token context in a minute. With
+layers on the NPU the fork now starts the runner without context shift: an answer that reaches the
+limit ends with `done_reason: "length"`, and a prompt that does not fit is refused with a clear
+message instead of being shifted. Raise `num_ctx` for long conversations.
+
 ## Redistribution
 
 - The signed set is a Qualcomm release asset: GenieX v0.9.1 on GitHub
