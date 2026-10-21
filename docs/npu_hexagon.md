@@ -251,6 +251,31 @@ once returned unrelated words for the second turn. It did not recur in 100 more 
 2026-10-20, each after a fresh load (50 whole on the NPU, 50 split 20/33): every one
 answered "Paris" and "Berlin".
 
+### CPU contention
+
+The point of the NPU on a laptop: a model generating there leaves the CPU to you. Measured
+2026-10-21 with `scripts/npu_contention.py` against the fork (package `73264854ae48`; on
+Windows the runner starts at above-normal priority, as upstream's does). An agent-style loop
+of sequential `/api/chat` requests (a 700-token system prompt with tool definitions, coding
+tasks in rotation, 200 new tokens each, temperature 0) runs for two minutes while two probes
+stand in for your own work: a fixed single-thread unit every 0.5 s (interactive latency) and
+a fixed all-cores unit back to back (a build or a test run). Same machine state as a working
+day: browsers and an editor open, 2 GB of RAM free.
+
+| Model | Where | Decode | Runner cores | Interactive p50 / p95 | All-cores unit |
+|---|---|---|---|---|---|
+| none (baseline) | | | 0 | 296 / 368 ms | 0.62 s |
+| Llama-3.1-8B Q4_0 (Temperum) | NPU | 9.0 tok/s | 0.02 | 297 / 379 ms | 0.62 s |
+| Llama-3.1-8B Q4_0 (Temperum) | CPU | 10.2 tok/s | 5.76 | 449 / 1067 ms | 1.67 s |
+| `llama3.2:3b-instruct-q4_0` | NPU | 18.4 tok/s | 0.03 | 299 / 363 ms | 0.63 s |
+| `llama3.2:3b-instruct-q4_0` | CPU | 21.3 tok/s | 5.47 | 596 / 1783 ms | 1.65 s |
+
+On the NPU the probes match the baseline and the model keeps its idle-machine speed (8.9 and
+19.0 tok/s measured alone). On the CPU, interactive work takes 1.5-2x longer at the median
+and 3-5x at the 95th percentile, the all-cores unit takes 2.7x longer, 5.5-5.8 cores are busy
+in the runner, and the model itself slows too (17.3 and 33.7 tok/s alone, 10.2 and 21.3
+beside the probes): both sides lose.
+
 ## Redistribution
 
 - The signed set is a Qualcomm release asset: GenieX v0.9.1 on GitHub
@@ -327,4 +352,5 @@ under `lib\llama_cpp`:
   toolchain or ABI probably is. Building the CPU variants in Visual Studio's environment, as
   the Hexagon backend is, has not been tried.
 - Moving llama.cpp past b11644 waits for a signed HTP set built from the new commit; the
-  `x/hexagon` test fails until `Pinned` names one.
+  `x/hexagon` test fails until `Pinned` names one. GenieX v0.9.3 (2026-10-19) re-signed the
+  set but still built it from `e467e5b`, so the pin stays at v0.9.1 (checked 2026-10-21).
