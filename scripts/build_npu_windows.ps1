@@ -1,13 +1,18 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$LLVMMinGWRoot,
-    [Parameter(Mandatory = $true)][string]$WindowsSDKInclude,
-    # Optional: also build llama.cpp's Hexagon NPU backend with this Hexagon SDK and
-    # Visual Studio's ARM64 clang (default: the newest Visual Studio with ARM64 tools).
+    # Build tools. Each is found on this machine when not given (the Find-* functions below say
+    # where they look); -DetectOnly reports what would be used, and a missing tool stops the
+    # script with where to get it and how to point the script at it.
+    [string]$LLVMMinGWRoot,
+    [string]$WindowsSDKInclude,
+    # The Hexagon SDK and Visual Studio's ARM64 clang build llama.cpp's Hexagon NPU backend;
+    # -SkipHexagon packages without it (CPU and QNN only).
     [string]$HexagonSDKRoot,
     [string]$VisualStudioRoot,
-    [string]$CMake = "cmake",
-    [string]$Ninja = "ninja",
+    [string]$CMake,
+    [string]$Ninja,
+    [switch]$SkipHexagon,
+    [switch]$DetectOnly,
     [string]$BuildDirectory = "build\npu-arm64",
     [string]$OutputDirectory = "dist",
     [ValidatePattern('^\d+\.\d+\.\d+-npu\.[A-Za-z0-9.-]+$')][string]$Version,
@@ -32,6 +37,159 @@ function Invoke-Checked {
 function Resolve-Tool {
     param([string]$Tool)
     return (Get-Command $Tool -CommandType Application -ErrorAction Stop).Source
+}
+
+# -- Finding the build tools ------------------------------------------------------------------
+# Each Find-* function returns a path or $null. The matching message says what the tool is, where
+# to get it, where to put it so it is found, and the parameter that names it explicitly.
+
+$GoHelp = @"
+Go was not found on PATH. It compiles the Ollama CLI and server.
+  Get: https://go.dev/dl/ (the Windows ARM64 installer, Go 1.26 or newer), then open a new terminal.
+"@
+$LLVMHelp = @"
+LLVM-MinGW was not found. It compiles the package's native CPU code.
+  Get: https://github.com/mstorsjo/llvm-mingw/releases/tag/20261006 (llvm-mingw-20261006-ucrt-aarch64.zip;
+       docs/development.md has its SHA256)
+  Put: extract it to C:\tools, so that C:\tools\llvm-mingw-20261006-ucrt-aarch64\bin\aarch64-w64-mingw32-gcc.exe
+       exists (a folder named llvm-mingw-* under C:\tools, your profile's tools folder, Downloads or C:\ is found)
+  Or:  pass -LLVMMinGWRoot <folder>, or set LLVM_MINGW_ROOT
+"@
+$SDKHelp = @"
+The Windows SDK headers were not found (um\DirectML.h and um\dxcore_interface.h; SDK 10.0.26100 or newer).
+  Get: in the Visual Studio Installer tick "Windows 11 SDK (10.0.26100.0)", or install it from
+       https://developer.microsoft.com/windows/downloads/windows-sdk/
+  Or:  pass -WindowsSDKInclude "C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0"
+"@
+$CMakeHelp = @"
+CMake was not found on PATH, in Visual Studio or in C:\Program Files\CMake.
+  Get: in the Visual Studio Installer tick "C++ CMake tools for Windows", or https://cmake.org/download/ (3.24 or newer)
+  Or:  pass -CMake <path to cmake.exe>
+"@
+$NinjaHelp = @"
+Ninja was not found on PATH or in Visual Studio.
+  Get: it comes with Visual Studio's "C++ CMake tools for Windows", or https://github.com/ninja-build/ninja/releases
+  Or:  pass -Ninja <path to ninja.exe>
+"@
+$HexagonHelp = @"
+The Hexagon SDK was not found. Without it the package has no NPU backend.
+  Get: https://github.com/snapdragon-toolchain/hexagon-sdk/releases (hexagon-sdk-v6.6.0.0-arm64-wos.tar.xz;
+       check its SHA256 against the release)
+  Put: extract it so that C:\Qualcomm\Hexagon_SDK\6.6.0.0\hexagon_sdk.json exists (that folder, HEXAGON_SDK_ROOT,
+       or a Hexagon_SDK or hx folder in your profile is found)
+  Or:  pass -HexagonSDKRoot <folder>, or -SkipHexagon for a package without the NPU backend
+"@
+$VSHelp = @"
+No Visual Studio with the ARM64 C++ tools and clang was found; the Hexagon NPU backend is built with them.
+  Get: Visual Studio 2022 or newer (Community is fine) with "Desktop development with C++", plus the
+       "MSVC ARM64 build tools" and "C++ Clang tools for Windows" components
+  Or:  pass -VisualStudioRoot <folder>, or -SkipHexagon
+"@
+
+function Find-OnPath {
+    param([string]$Name)
+    $found = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue
+    if ($found) { return @($found)[0].Source }
+    return $null
+}
+
+function Find-LLVMMinGW {
+    $candidates = @()
+    if ($env:LLVM_MINGW_ROOT) { $candidates += $env:LLVM_MINGW_ROOT }
+    foreach ($entry in @($env:PATH -split ';')) {
+        if ($entry -match 'llvm-mingw') { $candidates += (Split-Path -Parent $entry) }
+    }
+    foreach ($root in @("C:\tools", (Join-Path $env:USERPROFILE "tools"), (Join-Path $env:USERPROFILE "Downloads"),
+            (Join-Path $env:LOCALAPPDATA "Programs"), $env:USERPROFILE, "C:\")) {
+        if ($root -and (Test-Path -LiteralPath $root -PathType Container)) {
+            $candidates += @(Get-ChildItem -LiteralPath $root -Directory -Filter "llvm-mingw-*" -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending | ForEach-Object { $_.FullName })
+        }
+    }
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath (Join-Path $candidate "bin\aarch64-w64-mingw32-gcc.exe") -PathType Leaf)) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+    return $null
+}
+
+function Find-WindowsSDKInclude {
+    $roots = @()
+    foreach ($key in @("HKLM:\SOFTWARE\WOW6432Node\Microsoft\Microsoft SDKs\Windows\v10.0",
+            "HKLM:\SOFTWARE\Microsoft\Microsoft SDKs\Windows\v10.0")) {
+        $item = Get-ItemProperty -Path $key -Name InstallationFolder -ErrorAction SilentlyContinue
+        if ($item -and $item.InstallationFolder) { $roots += $item.InstallationFolder }
+    }
+    if ($env:WindowsSdkDir) { $roots += $env:WindowsSdkDir }
+    $roots += (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10")
+    foreach ($root in $roots) {
+        $include = Join-Path $root "Include"
+        if (-not (Test-Path -LiteralPath $include -PathType Container)) { continue }
+        $versions = @(Get-ChildItem -LiteralPath $include -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^10\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending)
+        foreach ($version in $versions) {
+            if ((Test-Path -LiteralPath (Join-Path $version.FullName "um\DirectML.h") -PathType Leaf) -and
+                (Test-Path -LiteralPath (Join-Path $version.FullName "um\dxcore_interface.h") -PathType Leaf)) {
+                return $version.FullName
+            }
+        }
+    }
+    return $null
+}
+
+$script:VisualStudioFound = $null
+function Find-VisualStudio {
+    param([string]$Requires)
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { return $null }
+    $arguments = @("-latest", "-products", "*", "-property", "installationPath")
+    if ($Requires) { $arguments = @("-requires", $Requires) + $arguments }
+    $found = @(& $vswhere @arguments 2>$null | Where-Object { $_ })
+    if ($found.Count -gt 0) { return $found[0] }
+    return $null
+}
+
+function Find-VSTool {
+    # A tool on PATH, else Visual Studio's bundled copy, else other usual places.
+    param([string]$Name, [string]$VSRelative, [string[]]$Elsewhere = @())
+    $onPath = Find-OnPath $Name
+    if ($onPath) { return $onPath }
+    if (-not $script:VisualStudioFound) { $script:VisualStudioFound = Find-VisualStudio }
+    if ($script:VisualStudioFound) {
+        $bundled = Join-Path $script:VisualStudioFound $VSRelative
+        if (Test-Path -LiteralPath $bundled -PathType Leaf) { return $bundled }
+    }
+    foreach ($candidate in $Elsewhere) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $candidate }
+    }
+    return $null
+}
+
+function Find-HexagonSDK {
+    $candidates = @()
+    if ($env:HEXAGON_SDK_ROOT) { $candidates += $env:HEXAGON_SDK_ROOT }
+    foreach ($root in @("C:\Qualcomm\Hexagon_SDK", (Join-Path $env:USERPROFILE "Qualcomm\Hexagon_SDK"),
+            (Join-Path $env:LOCALAPPDATA "Qualcomm\Hexagon_SDK"), (Join-Path $env:USERPROFILE "Hexagon_SDK"),
+            (Join-Path $env:USERPROFILE "hx"), "C:\Hexagon_SDK", "C:\tools\Hexagon_SDK")) {
+        if ($root -and (Test-Path -LiteralPath $root -PathType Container)) {
+            $candidates += @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending | ForEach-Object { $_.FullName })
+            $candidates += $root
+        }
+    }
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath (Join-Path $candidate "hexagon_sdk.json") -PathType Leaf)) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+    return $null
+}
+
+function Show-Tool {
+    param([string]$Name, [string]$Value, [bool]$Given)
+    $how = if ($Given) { "given" } else { "found" }
+    Write-Host ("  {0,-14} {1}  ({2})" -f $Name, $Value, $how)
 }
 
 function Write-UTF8 {
@@ -96,9 +254,27 @@ try {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
         throw "This packaging entrypoint requires Windows"
     }
-    $go = Resolve-Tool "go"
-    $cmake = Resolve-Tool $CMake
-    $ninja = Resolve-Tool $Ninja
+    $go = Find-OnPath "go"
+    if (-not $go) { throw $GoHelp }
+    $cmakeGiven = [bool]$CMake
+    $cmake = if ($CMake) { Resolve-Tool $CMake } else {
+        Find-VSTool "cmake.exe" "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" @((Join-Path $env:ProgramFiles "CMake\bin\cmake.exe"))
+    }
+    if (-not $cmake) { throw $CMakeHelp }
+    $ninjaGiven = [bool]$Ninja
+    $ninja = if ($Ninja) { Resolve-Tool $Ninja } else {
+        Find-VSTool "ninja.exe" "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+    }
+    if (-not $ninja) { throw $NinjaHelp }
+    $llvmGiven = [bool]$LLVMMinGWRoot
+    if (-not $LLVMMinGWRoot) { $LLVMMinGWRoot = Find-LLVMMinGW }
+    if (-not $LLVMMinGWRoot) { throw $LLVMHelp }
+    $sdkGiven = [bool]$WindowsSDKInclude
+    if (-not $WindowsSDKInclude) { $WindowsSDKInclude = Find-WindowsSDKInclude }
+    if (-not $WindowsSDKInclude) { throw $SDKHelp }
+    $hexagonGiven = [bool]$HexagonSDKRoot
+    if (-not $SkipHexagon -and -not $HexagonSDKRoot) { $HexagonSDKRoot = Find-HexagonSDK }
+    if (-not $SkipHexagon -and -not $HexagonSDKRoot) { throw $HexagonHelp }
     $llvm = (Resolve-Path -LiteralPath $LLVMMinGWRoot).Path
     $sdk = (Resolve-Path -LiteralPath $WindowsSDKInclude).Path
     $bin = Join-Path $llvm "bin"
@@ -134,18 +310,16 @@ try {
 
     # The Hexagon backend's prerequisites are checked before anything is built.
     $hexagon = $null
-    if ($HexagonSDKRoot) {
+    $vsGiven = [bool]$VisualStudioRoot
+    if ($HexagonSDKRoot -and -not $SkipHexagon) {
         $hexagonSdk = (Resolve-Path -LiteralPath $HexagonSDKRoot).Path
         $sdkInfo = Get-Content -LiteralPath (Join-Path $hexagonSdk "hexagon_sdk.json") -Raw | ConvertFrom-Json
         $toolsInfo = @($sdkInfo.root.tools.info | Where-Object { $_.name -eq "Hexagon Tools" })
         if ($toolsInfo.Count -ne 1) { throw "hexagon_sdk.json in $hexagonSdk does not name its Hexagon Tools" }
         $hexagonTools = Join-Path $hexagonSdk $toolsInfo[0].path
-        $vsInstaller = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer"
         if (-not $VisualStudioRoot) {
-            $vswhere = Join-Path $vsInstaller "vswhere.exe"
-            if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw "Missing build prerequisite: $vswhere (or pass -VisualStudioRoot)" }
-            $VisualStudioRoot = @(& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath)[0]
-            if (-not $VisualStudioRoot) { throw "No Visual Studio with the ARM64 C++ tools was found" }
+            $VisualStudioRoot = Find-VisualStudio "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+            if (-not $VisualStudioRoot) { throw $VSHelp }
         }
         $vs = (Resolve-Path -LiteralPath $VisualStudioRoot).Path
         $vsClang = Join-Path $vs "VC\Tools\Llvm\ARM64\bin\clang.exe"
@@ -167,6 +341,20 @@ try {
             signed_htp_libraries = "not included; 'ollama npu setup --provider hexagon' downloads Qualcomm's set"
         }
     }
+
+    Write-Host "Build tools:"
+    Show-Tool "Go" $go $false
+    Show-Tool "LLVM-MinGW" $llvm $llvmGiven
+    Show-Tool "Windows SDK" $sdk $sdkGiven
+    Show-Tool "CMake" $cmake $cmakeGiven
+    Show-Tool "Ninja" $ninja $ninjaGiven
+    if ($hexagon) {
+        Show-Tool "Hexagon SDK" $hexagonSdk $hexagonGiven
+        Show-Tool "Visual Studio" $vs $vsGiven
+    } else {
+        Write-Host "  Hexagon SDK    skipped (-SkipHexagon): no NPU backend in this package"
+    }
+    if ($DetectOnly) { return }
 
     $revision = @(& git rev-parse HEAD)
     if ($LASTEXITCODE -ne 0) { throw "Source must be a Git checkout" }
@@ -360,6 +548,10 @@ try {
     if ($hexagon) {
         Write-Output "Hexagon NPU backend included (opt-in: OLLAMA_HEXAGON=1); Qualcomm's signed NPU libraries come from 'ollama npu setup --provider hexagon --accept-qualcomm-terms'."
     }
+} catch {
+    # A missing tool or a failed step: the message alone, without PowerShell's stack trace.
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    exit 1
 } finally {
     Pop-Location
     foreach ($name in $originalEnvironment.Keys) {

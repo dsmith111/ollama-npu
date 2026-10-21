@@ -128,20 +128,26 @@ Studio is needed only for the optional Hexagon backend (below). Network access i
 needed for pinned source/modules/license tool dependencies on the first build.
 
 ```powershell
-.\scripts\build_npu_windows.ps1 `
-    -LLVMMinGWRoot C:\tools\llvm-mingw-20261006-ucrt-aarch64 `
-    -WindowsSDKInclude 'C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0' `
-    -CMake C:\tools\cmake\bin\cmake.exe `
-    -Ninja C:\tools\ninja\ninja.exe `
-    -BuildDirectory C:\build\ollama-npu-arm64 `
-    -OutputDirectory C:\packages\ollama-npu
+.\scripts\build_npu_windows.ps1 -DetectOnly   # shows the tools it found, or what to install
+.\scripts\build_npu_windows.ps1               # builds the package into .\dist
 ```
 
-`-HexagonSDKRoot C:\path\to\Hexagon_SDK\6.6.0.0` also builds llama.cpp's Hexagon NPU
-backend, which runs GGUF models on the Snapdragon NPU once enabled with
-`OLLAMA_HEXAGON=1` (see [npu_hexagon.md](npu_hexagon.md)). That needs Visual Studio's
-ARM64 C++ tools and its clang (`-VisualStudioRoot`; default: the newest found by
-vswhere). The backend builds in Visual Studio's ARM64 environment with clang targeting
+The script finds the tools on the machine: Go on `PATH`; LLVM-MinGW as `LLVM_MINGW_ROOT`
+or a `llvm-mingw-*` folder under `C:\tools`, your profile's `tools` or `Downloads`, or
+`C:\`; the Windows SDK from the registry; CMake and Ninja on `PATH` or in Visual Studio;
+the Hexagon SDK as `HEXAGON_SDK_ROOT`, `C:\Qualcomm\Hexagon_SDK\<version>` or a
+`Hexagon_SDK` or `hx` folder in your profile; Visual Studio through vswhere. When one is
+missing it stops and says what the tool is, where to get it, where to put it, and the
+parameter that names it: `-LLVMMinGWRoot`, `-WindowsSDKInclude`, `-CMake`, `-Ninja`,
+`-HexagonSDKRoot`, `-VisualStudioRoot`. `-BuildDirectory` and `-OutputDirectory` choose
+where it builds and writes.
+
+The Hexagon SDK (from the
+[snapdragon-toolchain releases](https://github.com/snapdragon-toolchain/hexagon-sdk/releases),
+`hexagon-sdk-v6.6.0.0-arm64-wos.tar.xz`) builds llama.cpp's Hexagon NPU backend, which
+runs GGUF models on the Snapdragon NPU once enabled with `OLLAMA_HEXAGON=1` (see
+[npu_hexagon.md](npu_hexagon.md)). That needs Visual Studio's ARM64 C++ tools and its
+clang. `-SkipHexagon` packages without the backend (CPU and QNN only). The backend builds in Visual Studio's ARM64 environment with clang targeting
 the MSVC ABI, as upstream builds its Windows ARM64 CUDA backend beside the LLVM-MinGW
 CPU payload, and reaches `ggml-base` only through its C API. Its build directory is
 `<BuildDirectory>-hexagon`. It installs `lib\ollama\hexagon\ggml-hexagon.dll` with its
