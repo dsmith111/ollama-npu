@@ -46,6 +46,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/discover/hexagon"
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/fs/gguf"
 	"github.com/ollama/ollama/ml"
@@ -205,6 +206,7 @@ type llamaServerLaunchConfig struct {
 	gpuLibs              []string
 	extraEnvs            map[string]string
 	forceNoMMProjOffload bool
+	predictedVRAM        uint64 // weights and KV cache (PredictServerVRAM)
 }
 
 func newLlamaServerHTTPClient() *http.Client {
@@ -420,6 +422,7 @@ func startLlamaServer(launch llamaServerLaunchConfig, out io.Writer) (cmd *exec.
 	}
 
 	params = appendFlashAttentionArgs(params, launch.gpus)
+	params = appendHexagonPollArgs(params, launch)
 
 	params = appendBatchArgs(params, launch.opts, launch.embedding, launch.numParallel)
 
@@ -541,6 +544,18 @@ func llamaServerLibraryPaths(exe string, gpuLibs []string, envUpdates map[string
 				envUpdates["GGML_BACKEND_PATH"] = backend
 			}
 		}
+		if hasHexagonBackend(dir) {
+			if htp, err := hexagon.VerifiedDir(hexagon.SearchDirs(dir)); err != nil {
+				slog.Warn("Hexagon NPU libraries unavailable", "error", err)
+			} else {
+				if envUpdates[adspLibraryPathEnv] == "" {
+					envUpdates[adspLibraryPathEnv] = adspLibraryPath(htp)
+				}
+				if _, set := os.LookupEnv(hexagonMemoryEnv); !set && envUpdates[hexagonMemoryEnv] == "" {
+					envUpdates[hexagonMemoryEnv] = hexagonDefaultMemory
+				}
+			}
+		}
 		addPath(dir)
 	}
 	if libraryPath, ok := os.LookupEnv(llamaServerLibraryPathEnv()); ok {
@@ -549,6 +564,39 @@ func llamaServerLibraryPaths(exe string, gpuLibs []string, envUpdates map[string
 		}
 	}
 	return adjustPlatformLibraryPaths(libraryPaths, gpuLibs)
+}
+
+// adspLibraryPathEnv is where FastRPC looks for the Hexagon NPU libraries
+// (libggml-htp-v*.so) that llama.cpp's Hexagon backend loads on the DSP.
+const adspLibraryPathEnv = "ADSP_LIBRARY_PATH"
+
+// The Hexagon backend reports no device memory unless GGML_HEXAGON_MBUF sets
+// a total ("dynamic,static,total"); discovery drops zero-memory devices and
+// llama-server cannot fit layers to them. The total is reported, not
+// enforced, so it is the budget llama-server fits a model into. The backend
+// keeps every buffer a model has used mapped, so a model's whole NPU footprint
+// must map at once; one that does not fit the budget splits with the CPU. The
+// default suits a 16 GB machine (llama-server's fit keeps 1 GiB of it free);
+// setting the variable changes the budget.
+const (
+	hexagonMemoryEnv     = "GGML_HEXAGON_MBUF"
+	hexagonDefaultMemory = ",,6144M"
+)
+
+// hasHexagonBackend reports whether dir holds llama.cpp's Hexagon backend,
+// whose NPU half (the signed HTP set) lives wherever hexagon.VerifiedDir finds it.
+func hasHexagonBackend(dir string) bool {
+	matches, _ := filepath.Glob(filepath.Join(dir, "*ggml-hexagon*"))
+	return len(matches) > 0
+}
+
+// adspLibraryPath puts dir ahead of any user-provided search path. FastRPC
+// separates entries with ';' on every platform.
+func adspLibraryPath(dir string) string {
+	if existing := os.Getenv(adspLibraryPathEnv); existing != "" {
+		return dir + ";" + existing
+	}
+	return dir
 }
 
 func findLlamaServerGPUBackend(dir string) string {
@@ -666,6 +714,65 @@ func appendLoadModeArgs(params []string, opts api.Options, gpus []ml.DeviceInfo)
 	}
 
 	return params
+}
+
+// hexagonFitMargin is what llama-server's fit keeps free on each device (its
+// default --fit-target), so it also decides whether a model loads whole.
+const hexagonFitMargin = 1 << 30
+
+// appendHexagonPollArgs lets llama-server's idle CPU threads sleep when the
+// whole model runs on the Hexagon NPU. By default they poll for work between
+// ops, which keeps more than a CPU core busy while the NPU does the work. A
+// model split with the CPU needs the polling, so only whole fits qualify.
+func appendHexagonPollArgs(params []string, launch llamaServerLaunchConfig) []string {
+	if !launch.runsWholeOnHexagon() {
+		return params
+	}
+	return append(params, "--poll", "0")
+}
+
+// runsWholeOnHexagon reports whether every selected device is a Hexagon NPU and
+// the model is expected to fit on them whole.
+func (launch llamaServerLaunchConfig) runsWholeOnHexagon() bool {
+	if len(launch.gpus) == 0 || launch.opts.NumGPU == 0 || launch.predictedVRAM == 0 {
+		return false
+	}
+	if launch.opts.NumGPU > 0 && uint64(launch.opts.NumGPU) < launch.modelLayers {
+		return false
+	}
+	var total uint64
+	for _, gpu := range launch.gpus {
+		if !strings.EqualFold(gpu.Library, "Hexagon") {
+			return false
+		}
+		total += gpu.TotalMemory
+	}
+	return launch.predictedVRAM+hexagonFitMargin <= total
+}
+
+// usesHexagon reports whether a Hexagon NPU is among the selected devices and
+// layers may be placed on it.
+func (launch llamaServerLaunchConfig) usesHexagon() bool {
+	if len(launch.gpus) == 0 || launch.opts.NumGPU == 0 {
+		return false
+	}
+	for _, gpu := range launch.gpus {
+		if strings.EqualFold(gpu.Library, "Hexagon") {
+			return true
+		}
+	}
+	return false
+}
+
+// contextShiftAllowed reports whether llama-server may shift the context when
+// a conversation outgrows num_ctx. The shift re-applies RoPE to the cached
+// keys, which llama.cpp's Hexagon backend cannot run on a buffer that lives on
+// the NPU: ggml-backend aborts ("pre-allocated tensor (cache_k_l0 (view)) in a
+// buffer (HTP0) that cannot run the operation (ROPE)") and the request fails
+// with HTTP 500. Without the shift the runner stops an answer at the context
+// limit (stop type "limit") and refuses a prompt that does not fit.
+func contextShiftAllowed(launch llamaServerLaunchConfig) bool {
+	return !launch.usesHexagon()
 }
 
 func appendMainGPUArgs(params []string, opts api.Options) []string {
@@ -965,22 +1072,27 @@ func NewLlamaServerRunner(
 	serverEnvs["LLAMA_MEDIA_MARKER"] = mediaMarker
 
 	launch := llamaServerLaunchConfig{
-		modelPath:    splitModel.modelPath,
-		modelArch:    arch,
-		draftType:    draftType,
-		projectors:   slices.Clone(splitModel.projectors),
-		mmprojMemory: mmprojMemory,
-		modelLayers:  f.KV().BlockCount() + 1,
-		adapters:     slices.Clone(adapters),
-		opts:         opts,
-		numParallel:  numParallel,
-		kvCacheType:  kvCacheType,
-		embedding:    isEmbedding,
-		decision:     decisionType != "",
-		config:       config,
-		gpus:         slices.Clone(gpus),
-		gpuLibs:      slices.Clone(gpuLibs),
-		extraEnvs:    cloneStringMap(serverEnvs),
+		modelPath:     splitModel.modelPath,
+		modelArch:     arch,
+		draftType:     draftType,
+		projectors:    slices.Clone(splitModel.projectors),
+		mmprojMemory:  mmprojMemory,
+		modelLayers:   f.KV().BlockCount() + 1,
+		adapters:      slices.Clone(adapters),
+		opts:          opts,
+		numParallel:   numParallel,
+		kvCacheType:   kvCacheType,
+		embedding:     isEmbedding,
+		decision:      decisionType != "",
+		config:        config,
+		gpus:          slices.Clone(gpus),
+		gpuLibs:       slices.Clone(gpuLibs),
+		extraEnvs:     cloneStringMap(serverEnvs),
+		predictedVRAM: PredictServerVRAM(modelPath, f, opts.NumCtx*numParallel),
+	}
+	if launch.config.ContextShift && !contextShiftAllowed(launch) {
+		slog.Info("context shift disabled: the Hexagon NPU cannot shift a KV cache it holds; answers stop at num_ctx")
+		launch.config.ContextShift = false
 	}
 
 	s := &llamaServerRunner{
