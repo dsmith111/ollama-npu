@@ -41,6 +41,26 @@
       }
     },
     {
+      "name": "hexagon_arm64",
+      "inherits": ["default"],
+      "binaryDir": "${sourceDir}/../../build/llama-server-hexagon_arm64",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "GGML_CPU_ALL_VARIANTS": "OFF",
+        "GGML_HEXAGON": "ON",
+        "GGML_OPENCL": "OFF",
+        "HEXAGON_SDK_ROOT": "$env{HEXAGON_SDK_ROOT}",
+        "HEXAGON_TOOLS_ROOT": "$env{HEXAGON_TOOLS_ROOT}",
+        "PREBUILT_LIB_DIR": "windows_aarch64",
+        "OLLAMA_HEXAGON_HTP_DIR": "$env{OLLAMA_HEXAGON_HTP_DIR}",
+        "OLLAMA_RUNNER_DIR": "hexagon",
+        "OLLAMA_GPU_BACKEND": "hexagon",
+        "OLLAMA_WINDOWS_RUNTIME_ARCH": "arm64"
+      }
+    },
+    {
       "name": "darwin",
       "inherits": ["default"],
       "binaryDir": "${sourceDir}/../../build/llama-server-darwin",
@@ -247,6 +267,11 @@
       "name": "cpu_arm64",
       "configurePreset": "cpu_arm64",
       "targets": ["llama-server", "llama-quantize"]
+    },
+    {
+      "name": "hexagon_arm64",
+      "configurePreset": "hexagon_arm64",
+      "targets": ["ggml-hexagon"]
     },
     {
       "name": "darwin",
