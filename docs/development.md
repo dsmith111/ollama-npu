@@ -164,8 +164,11 @@ Windows reports; llama.cpp lists no Windows on Arm variants yet, so
 `llama/compat/002-windows-arm64-cpu-variants.patch` adds them) and matching CLI, bundles
 runtime peers/notices and audits ARM64/ARM64X binaries and imports without resolving
 dependencies through developer `PATH`. Default identity:
-`0.0.0-npu.dev.<source-commit>`. `-Version 0.0.0-npu.preview.1` supplies an explicit
-fork identity. Dirty checkouts fail unless `-AllowDirty` is supplied; development
+`0.0.0-npu.dev.<source-commit>`. `-Version` supplies an explicit fork identity: releases use
+`<upstream version>-npu.<n>`, for example `0.40.0-npu.1` for the first package on upstream
+0.40.0, and are published on GitHub as the zip with its `.sha256` (the fork's client reads
+the `-npu` marker to tell its own server from stock Ollama). Dirty checkouts fail unless
+`-AllowDirty` is supplied; development
 outputs then receive `.dirty`. Existing package outputs are never overwritten.
 On Windows, the pinned supplier clone enables `core.longpaths` only in that owned
 checkout, so nested builds can fetch its unused UI files. User/system Git settings

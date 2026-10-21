@@ -2301,8 +2301,27 @@ func checkServerHeartbeat(cmd *cobra.Command, _ []string) error {
 		if err := startApp(cmd.Context(), client); err != nil { //nolint:staticcheck,nolintlint // startApp always returns non-nil on Linux (start_default.go) but can return nil on macOS/Windows
 			return err
 		}
+		return nil
+	}
+	if serverVersion, err := client.Version(cmd.Context()); err == nil {
+		if hint := stockServerHint(envconfig.Host().Host, version.Version, serverVersion); hint != "" {
+			fmt.Fprintln(os.Stderr, "Warning:", hint)
+		}
 	}
 	return nil
+}
+
+// stockServerHint warns a user of the NPU fork whose client reached a server that is not the
+// fork: typically the stock Ollama app holding port 11434. That server has no NPU backend, so
+// every model would run on the CPU or GPU while the user expects the NPU. Fork builds carry
+// "-npu" in their version (see scripts/build_npu_windows.ps1); stock releases never do.
+func stockServerHint(host, clientVersion, serverVersion string) string {
+	if serverVersion == "" || !strings.Contains(clientVersion, "-npu") || strings.Contains(serverVersion, "-npu") {
+		return ""
+	}
+	return fmt.Sprintf("the server at %s is stock Ollama %s, not this NPU fork, so models will not run on the NPU: "+
+		"quit the Ollama app (its tray icon) and run `.\\ollama.exe serve` from the fork's folder with "+
+		"OLLAMA_HEXAGON=1, or set OLLAMA_HOST to the fork's server", host, serverVersion)
 }
 
 func versionHandler(cmd *cobra.Command, _ []string) {

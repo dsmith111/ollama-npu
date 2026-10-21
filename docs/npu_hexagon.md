@@ -7,14 +7,21 @@ a portable package (`scripts\build_npu_windows.ps1 -HexagonSDKRoot`).
 
 ## Enabling it
 
-Get Qualcomm's signed NPU libraries once, then start the server with `OLLAMA_HEXAGON=1`.
-Upstream first shipped Vulkan the same way, as an opt-in setting (#12931):
+Get the portable package from the fork's
+[releases](https://github.com/dsmith111/ollama-npu/releases/latest) and extract it into a new
+folder. Then get Qualcomm's signed NPU libraries once, and start the server with
+`OLLAMA_HEXAGON=1`. Upstream first shipped Vulkan the same way, as an opt-in setting (#12931):
 
-```bat
-ollama npu setup --provider hexagon --accept-qualcomm-terms
-set OLLAMA_HEXAGON=1
-ollama serve
+```powershell
+.\ollama.exe npu setup --provider hexagon --accept-qualcomm-terms
+$env:OLLAMA_HEXAGON = "1"
+.\ollama.exe serve
 ```
+
+In cmd.exe the switch is `set OLLAMA_HEXAGON=1`. Quit the stock Ollama app first if it is
+running: it holds port 11434 and has no NPU backend. The fork's client warns when the server
+it reaches is not the fork, and when no server answers it says to start one instead of
+launching the stock app as upstream's client does.
 
 Setup downloads Qualcomm's GenieX v0.9.1 Windows SDK archive (87 MB) from GitHub, checks
 it and the six files it needs against pinned hashes (`x/hexagon`), and installs them with

@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/ollama/ollama/api"
+	"github.com/ollama/ollama/envconfig"
 	"golang.org/x/sys/windows"
 )
 
@@ -21,29 +22,24 @@ const (
 	Installer = "OllamaSetup.exe"
 )
 
+// startApp is upstream's fallback when no server answers: start the desktop app, which runs
+// a server. The portable NPU fork ships no app, and upstream's search would find and start a
+// stock Ollama app installed elsewhere on the machine, handing the user a server without the
+// NPU backend. The fork starts only an app beside this executable and otherwise says what to do.
 func startApp(ctx context.Context, client *api.Client) error {
 	if len(isProcRunning(Installer)) > 0 {
 		return fmt.Errorf("upgrade in progress...")
 	}
-	AppName := "ollama app.exe"
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	appExe := filepath.Join(filepath.Dir(exe), AppName)
-	_, err = os.Stat(appExe)
-	if errors.Is(err, os.ErrNotExist) {
-		// Try the standard install location
-		localAppData := os.Getenv("LOCALAPPDATA")
-		appExe = filepath.Join(localAppData, "Ollama", AppName)
-		_, err := os.Stat(appExe)
-		if errors.Is(err, os.ErrNotExist) {
-			// Finally look in the path
-			appExe, err = exec.LookPath(AppName)
-			if err != nil {
-				return errors.New("could not locate ollama app")
-			}
+	appExe := filepath.Join(filepath.Dir(exe), "ollama app.exe")
+	if _, err := os.Stat(appExe); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
+		return errors.New(noServerHint(envconfig.Host().Host))
 	}
 
 	cmd_path := "c:\\Windows\\system32\\cmd.exe"
@@ -62,6 +58,13 @@ func startApp(ctx context.Context, client *api.Client) error {
 		defer cmd.Process.Release() //nolint:errcheck
 	}
 	return waitForServer(ctx, client)
+}
+
+// noServerHint tells a user of the portable package what to do when nothing answers at host.
+func noServerHint(host string) string {
+	return fmt.Sprintf("no Ollama server is running at %s. This portable NPU fork has no desktop app to start one: "+
+		"run `.\\ollama.exe serve` from the fork's folder in another window first (with OLLAMA_HEXAGON=1 to use "+
+		"the NPU), or point OLLAMA_HOST at a running server", host)
 }
 
 func isProcRunning(procName string) []uint32 {

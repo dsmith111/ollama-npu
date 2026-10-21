@@ -156,22 +156,40 @@ On a Snapdragon X laptop this fork runs GGUF models on the Hexagon NPU through l
 Hexagon backend, and ONNX Runtime GenAI/QNN bundles through a separate runner. Stock models
 from ollama.com need no conversion: with the NPU switch on, `ollama run llama3.2` loads the
 model whole on the NPU and `ollama ps` shows "100% NPU", and so do models others converted
-with Temperum and shared there, such as `ollama run dsmith111/qwen2.5-0.5b-instruct:npu`. A model generating on the NPU leaves
-the CPU almost idle, so an assistant or agent can run beside your own work. Enabling it takes
-three commands (the first downloads Qualcomm's signed NPU libraries after showing their terms):
+with Temperum and shared there, such as `ollama run dsmith111/qwen2.5-0.5b-instruct:npu`. A
+model generating on the NPU leaves the CPU almost idle, so an assistant or agent can run
+beside your own work.
 
-```
-ollama npu setup --provider hexagon --accept-qualcomm-terms
-set OLLAMA_HEXAGON=1
-ollama serve
-```
+The fork is a portable command line and server, not an installer; the upstream download
+links above install stock Ollama, which does not use the NPU.
+
+1. Download `ollama-npu-windows-arm64-<version>.zip` from the
+   [latest release](https://github.com/dsmith111/ollama-npu/releases/latest) and extract it
+   into a new folder, for example `C:\ollama-npu`.
+2. If the stock Ollama app is running, quit it from its tray icon: it holds port 11434 and
+   has no NPU backend. (The fork's client warns when it reaches a stock server, and does not
+   start the stock app when no server runs.)
+3. In PowerShell, in that folder. The first command downloads Qualcomm's signed NPU libraries
+   after showing their terms; the switch keeps the backend off until you ask for it:
+
+   ```powershell
+   .\ollama.exe npu setup --provider hexagon --accept-qualcomm-terms
+   $env:OLLAMA_HEXAGON = "1"
+   .\ollama.exe serve
+   ```
+
+4. In a second PowerShell window in the same folder (`ps` shows "100% NPU"; in cmd.exe the
+   switch is `set OLLAMA_HEXAGON=1`):
+
+   ```powershell
+   .\ollama.exe run llama3.2 "Say hello"
+   .\ollama.exe ps
+   ```
 
 [GGUF on the NPU](docs/npu_hexagon.md) lists the ollama.com models measured, what to pull,
 and the memory budget; [QNN bundles](docs/npu_qnn.md) covers the ONNX route. To convert a
 Hugging Face model the library does not have, use [Temperum](https://github.com/dsmith111/temperum).
-The upstream download/install commands above install stock Ollama, not this fork; the fork
-has no published release yet, so build its portable package as described in
-[docs/development.md](docs/development.md).
+To build the package yourself, see [docs/development.md](docs/development.md).
 
 ## Community Integrations
 
