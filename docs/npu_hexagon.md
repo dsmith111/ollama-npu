@@ -59,10 +59,11 @@ decoded about a third faster here, and phi4-mini's default tag processed its sho
 79 tok/s against 266-477 for the others. Models up to about 5 GiB load whole (see "Memory
 budget"); larger ones are split with the CPU, which is slower. Converting a Hugging Face
 model yourself is for models the library does not have, or for a Q4_0 of one that only has
-K-quant tags: [Temperum](https://github.com/dsmith111/temperum) does that, and its
-Llama-3.2-3B bundle decoded at 21.1 tok/s, the same as the library's `-q4_0` tag.
+K-quant tags: llama.cpp's `convert_hf_to_gguf.py` and `llama-quantize` produce a GGUF that
+`ollama create` imports, and a Llama-3.2-3B converted that way decoded at 21.1 tok/s, the
+same as the library's `-q4_0` tag.
 
-Models converted with Temperum and uploaded to ollama.com pull the same way. The first one,
+Models converted this way and uploaded to ollama.com pull the same way. The first one,
 `dsmith111/qwen2.5-0.5b-instruct:npu` (Qwen2.5-0.5B at Q4_0 with its checked chat template),
 pulled into a fresh store in 9 s and ran whole on the NPU: 80.8 tok/s decode, 0.16 cores busy
 while generating.
@@ -181,14 +182,13 @@ from its extracted ZIP with the set from setup:
 
 - Qwen2.5-1.5B Q4_0 loaded all 29 layers on HTP0 (898 MiB) and decoded 24 tokens at
   about 39 tok/s.
-- `temperum` converted Qwen2.5-0.5B with the package's own `llama-quantize` and
-  verified it with its `llama-server` and `llama-perplexity`: 25/25 layers on HTP0,
+- Qwen2.5-0.5B converted with llama.cpp, quantized with the package's own `llama-quantize`
+  and checked with its `llama-server` and `llama-perplexity`: 25/25 layers on HTP0,
   perplexity 1.16x the 16-bit model, long-prompt retrieval correct at 875 and 1,763
   tokens, and the chat template matching transformers'.
 - Nine models from 0.36B to 3.8B parameters (Qwen2.5, Qwen3, SmolLM2, TinyLlama,
-  DeepSeek-R1-Distill-Qwen, Phi-3.5-mini, Phi-4-mini) were converted with `temperum`,
-  installed and chatted with through the package; the converter's `docs/models.md` has
-  the table.
+  DeepSeek-R1-Distill-Qwen, Phi-3.5-mini, Phi-4-mini) converted the same way were
+  installed and chatted with through the package.
 
 ### CPU backend
 
@@ -265,8 +265,8 @@ day: browsers and an editor open, 2 GB of RAM free.
 | Model | Where | Decode | Runner cores | Interactive p50 / p95 | All-cores unit |
 |---|---|---|---|---|---|
 | none (baseline) | | | 0 | 296 / 368 ms | 0.62 s |
-| Llama-3.1-8B Q4_0 (Temperum) | NPU | 9.0 tok/s | 0.02 | 297 / 379 ms | 0.62 s |
-| Llama-3.1-8B Q4_0 (Temperum) | CPU | 10.2 tok/s | 5.76 | 449 / 1067 ms | 1.67 s |
+| Llama-3.1-8B Q4_0 (converted with llama.cpp) | NPU | 9.0 tok/s | 0.02 | 297 / 379 ms | 0.62 s |
+| Llama-3.1-8B Q4_0 (converted with llama.cpp) | CPU | 10.2 tok/s | 5.76 | 449 / 1067 ms | 1.67 s |
 | `llama3.2:3b-instruct-q4_0` | NPU | 18.4 tok/s | 0.03 | 299 / 363 ms | 0.63 s |
 | `llama3.2:3b-instruct-q4_0` | CPU | 21.3 tok/s | 5.47 | 596 / 1783 ms | 1.65 s |
 
