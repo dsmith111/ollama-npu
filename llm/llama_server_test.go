@@ -3,7 +3,9 @@ package llm
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ollama/ollama/discover/hexagon"
 	"github.com/ollama/ollama/fs/gguf"
 	gguftest "github.com/ollama/ollama/internal/testutil/gguf"
 	"github.com/ollama/ollama/ml"
@@ -1366,6 +1369,94 @@ func TestSetupLlamaServerCommandEnv(t *testing.T) {
 	}
 }
 
+func TestSetupLlamaServerCommandEnvHexagon(t *testing.T) {
+	exeDir := t.TempDir()
+	exe := filepath.Join(exeDir, "llama-server")
+	if err := os.WriteFile(exe, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plainDir := t.TempDir()
+	hexDir := t.TempDir() // the backend; packages leave the signed HTP set out of it
+	if err := os.WriteFile(filepath.Join(hexDir, "ggml-hexagon.dll"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A signed set elsewhere, pinned for this test.
+	htpDir := t.TempDir()
+	pinned := hexagon.Release{Files: map[string]string{}}
+	for _, name := range []string{"libggml-htp-v73.so", "libggml-htp.cat"} {
+		content := []byte(name)
+		if err := os.WriteFile(filepath.Join(htpDir, name), content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(content)
+		pinned.Files[name] = hex.EncodeToString(sum[:])
+	}
+	original := hexagon.Pinned
+	hexagon.Pinned = pinned
+	t.Cleanup(func() { hexagon.Pinned = original })
+	t.Setenv(hexagon.PathEnv, "")
+
+	adspEnv := func(gpuLibs ...string) (string, bool) {
+		cmd := exec.Command("echo")
+		SetupLlamaServerCommandEnv(cmd, exe, gpuLibs, nil)
+		for _, kv := range cmd.Env {
+			if key, value, ok := strings.Cut(kv, "="); ok && strings.EqualFold(key, adspLibraryPathEnv) {
+				return value, true
+			}
+		}
+		return "", false
+	}
+
+	t.Setenv(adspLibraryPathEnv, "")
+	os.Unsetenv(adspLibraryPathEnv)
+	if got, ok := adspEnv(ml.LibOllamaPath, plainDir); ok {
+		t.Fatalf("%s = %q for a runner without the Hexagon backend, want unset", adspLibraryPathEnv, got)
+	}
+	if got, ok := adspEnv(ml.LibOllamaPath, hexDir); ok {
+		t.Fatalf("%s = %q with no signed set installed, want unset", adspLibraryPathEnv, got)
+	}
+	t.Setenv(hexagon.PathEnv, htpDir)
+	if got, _ := adspEnv(ml.LibOllamaPath, hexDir); got != htpDir {
+		t.Fatalf("%s = %q, want the selected set %q", adspLibraryPathEnv, got, htpDir)
+	}
+
+	t.Setenv(adspLibraryPathEnv, "C:\\user\\dsp")
+	if got, _ := adspEnv(ml.LibOllamaPath, hexDir); got != htpDir+";C:\\user\\dsp" {
+		t.Fatalf("%s = %q, want the signed set ahead of the user's path", adspLibraryPathEnv, got)
+	}
+	os.Unsetenv(adspLibraryPathEnv)
+
+	// A changed file is refused rather than loaded.
+	if err := os.WriteFile(filepath.Join(htpDir, "libggml-htp-v73.so"), []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := adspEnv(ml.LibOllamaPath, hexDir); ok {
+		t.Fatalf("%s = %q for a set that fails its pin, want unset", adspLibraryPathEnv, got)
+	}
+	if err := os.WriteFile(filepath.Join(htpDir, "libggml-htp-v73.so"), []byte("libggml-htp-v73.so"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	memory := func() string {
+		cmd := exec.Command("echo")
+		SetupLlamaServerCommandEnv(cmd, exe, []string{ml.LibOllamaPath, hexDir}, nil)
+		for _, kv := range cmd.Env {
+			if key, value, ok := strings.Cut(kv, "="); ok && strings.EqualFold(key, hexagonMemoryEnv) {
+				return value
+			}
+		}
+		return ""
+	}
+	os.Unsetenv(hexagonMemoryEnv)
+	if got := memory(); got != hexagonDefaultMemory {
+		t.Fatalf("%s = %q, want the default budget %q", hexagonMemoryEnv, got, hexagonDefaultMemory)
+	}
+	t.Setenv(hexagonMemoryEnv, ",,1G")
+	if got := memory(); got != ",,1G" {
+		t.Fatalf("%s = %q, want the user's setting kept", hexagonMemoryEnv, got)
+	}
+}
+
 func TestFilteredEnvLogValue(t *testing.T) {
 	attrs := filteredEnv([]string{
 		"OLLAMA_DEBUG=1",
@@ -1998,6 +2089,67 @@ func TestAppendBatchArgs(t *testing.T) {
 			got := appendBatchArgs(nil, tt.opts, tt.embedding, tt.numParallel)
 			if !slices.Equal(got, tt.want) {
 				t.Fatalf("appendBatchArgs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAppendHexagonPollArgs(t *testing.T) {
+	const gib = uint64(1) << 30
+	npu := ml.DeviceInfo{DeviceID: ml.DeviceID{Library: "Hexagon"}, TotalMemory: 5 * gib}
+	gpu := ml.DeviceInfo{DeviceID: ml.DeviceID{Library: "CUDA"}, TotalMemory: 24 * gib}
+	auto := api.Options{Runner: api.Runner{NumGPU: -1}}
+	tests := []struct {
+		name      string
+		gpus      []ml.DeviceInfo
+		opts      api.Options
+		predicted uint64
+		want      bool
+	}{
+		{"whole on the NPU", []ml.DeviceInfo{npu}, auto, 2 * gib, true},
+		{"all layers requested", []ml.DeviceInfo{npu}, api.Options{Runner: api.Runner{NumGPU: 29}}, 2 * gib, true},
+		{"split with the CPU (too big)", []ml.DeviceInfo{npu}, auto, 4*gib + 1, false},
+		{"split with the CPU (fewer layers)", []ml.DeviceInfo{npu}, api.Options{Runner: api.Runner{NumGPU: 10}}, 2 * gib, false},
+		{"CPU only", []ml.DeviceInfo{npu}, api.Options{Runner: api.Runner{NumGPU: 0}}, 2 * gib, false},
+		{"no NPU", nil, auto, 2 * gib, false},
+		{"another GPU", []ml.DeviceInfo{gpu}, auto, 2 * gib, false},
+		{"unknown size", []ml.DeviceInfo{npu}, auto, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launch := llamaServerLaunchConfig{gpus: tt.gpus, opts: tt.opts, modelLayers: 29, predictedVRAM: tt.predicted}
+			got := appendHexagonPollArgs([]string{"base"}, launch)
+			if want := map[bool][]string{true: {"base", "--poll", "0"}, false: {"base"}}[tt.want]; !slices.Equal(got, want) {
+				t.Fatalf("args = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// Context shift re-applies RoPE to cached keys, which the Hexagon backend cannot run on the NPU
+// (the runner aborted). It is allowed only when no layer can land on a Hexagon device.
+func TestContextShiftAllowedOnlyWithoutHexagonLayers(t *testing.T) {
+	npu := ml.DeviceInfo{DeviceID: ml.DeviceID{Library: "Hexagon"}, TotalMemory: 5 << 30}
+	gpu := ml.DeviceInfo{DeviceID: ml.DeviceID{Library: "CUDA"}, TotalMemory: 24 << 30}
+	auto := api.Options{Runner: api.Runner{NumGPU: -1}}
+	tests := []struct {
+		name string
+		gpus []ml.DeviceInfo
+		opts api.Options
+		want bool
+	}{
+		{"whole on the NPU", []ml.DeviceInfo{npu}, auto, false},
+		{"split with the CPU", []ml.DeviceInfo{npu}, api.Options{Runner: api.Runner{NumGPU: 10}}, false},
+		{"NPU present but CPU only", []ml.DeviceInfo{npu}, api.Options{Runner: api.Runner{NumGPU: 0}}, true},
+		{"NPU beside a GPU", []ml.DeviceInfo{gpu, npu}, auto, false},
+		{"no NPU", nil, auto, true},
+		{"another GPU", []ml.DeviceInfo{gpu}, auto, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launch := llamaServerLaunchConfig{gpus: tt.gpus, opts: tt.opts, modelLayers: 29}
+			if got := contextShiftAllowed(launch); got != tt.want {
+				t.Fatalf("contextShiftAllowed = %v, want %v", got, tt.want)
 			}
 		})
 	}

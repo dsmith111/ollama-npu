@@ -594,6 +594,40 @@ if(OLLAMA_RUNNER_DIR)
             )
         endif()
     endif()
+    if(GGML_HEXAGON)
+        # The NPU half of the backend is a signed set pinned in discover/hexagon,
+        # and it must be built from the same llama.cpp commit as this backend. A
+        # local source tree (OLLAMA_LLAMA_CPP_SOURCE) is the developer's own choice
+        # and is not checked.
+        file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../../discover/hexagon/hexagon.go" _hexagon_pin
+            REGEX "LlamaCppTag:[ ]*\"[^\"]+\"")
+        string(REGEX REPLACE ".*\"([^\"]+)\".*" "\\1" _hexagon_pin "${_hexagon_pin}")
+        if(NOT DEFINED ENV{OLLAMA_LLAMA_CPP_SOURCE} AND NOT _hexagon_pin STREQUAL LLAMA_CPP_GIT_TAG)
+            message(FATAL_ERROR
+                "The signed Hexagon NPU libraries pinned in discover/hexagon are built from "
+                "llama.cpp ${_hexagon_pin}, but this build uses ${LLAMA_CPP_GIT_TAG}; the two must match")
+        endif()
+        set(OLLAMA_HEXAGON_HTP_DIR "" CACHE PATH
+            "Optional: a signed libggml-htp-v*.so set to bundle with a local build")
+        if(OLLAMA_HEXAGON_HTP_DIR)
+            # The HTP libraries run on the NPU. Windows loads them only when a trusted
+            # catalog signs them, and they must come from this llama.cpp commit.
+            # Qualcomm publishes a signed set per GenieX release; its terms restrict
+            # its use, so packages leave it out and discover/hexagon finds the set the
+            # user put in place. A local build may bundle a copy here.
+            foreach(_htp_name IN ITEMS
+                    libggml-htp-v73.so libggml-htp-v75.so libggml-htp-v79.so libggml-htp-v81.so
+                    libggml-htp.cat libggml-htp.inf)
+                if(NOT EXISTS "${OLLAMA_HEXAGON_HTP_DIR}/${_htp_name}")
+                    message(FATAL_ERROR
+                        "OLLAMA_HEXAGON_HTP_DIR must contain ${_htp_name}: signed HTP "
+                        "libraries built from llama.cpp ${LLAMA_CPP_GIT_TAG}")
+                endif()
+                install(FILES "${OLLAMA_HEXAGON_HTP_DIR}/${_htp_name}"
+                    DESTINATION "${_base_dest}/${OLLAMA_RUNNER_DIR}" COMPONENT llama-server)
+            endforeach()
+        endif()
+    endif()
 else()
     # CPU/base build — install llama-server, llama-quantize + all shared libs + CPU backend modules
     # RUNTIME covers executables and Windows DLLs; LIBRARY covers .so on Linux
