@@ -95,7 +95,7 @@ From an ARM64 Visual Studio environment (`vcvarsarm64.bat`) with clang first on 
 set HEXAGON_SDK_ROOT=C:\path\to\Hexagon_SDK\6.6.0.0
 set HEXAGON_TOOLS_ROOT=%HEXAGON_SDK_ROOT%\tools\HEXAGON_Tools\19.0.07
 cmake -S llama\server --preset cpu_arm64_clang -B build\cpu
-cmake --build build\cpu --target llama-server llama-quantize llama-perplexity
+cmake --build build\cpu --target llama-server llama-quantize llama-perplexity llama-imatrix
 cmake --install build\cpu --prefix dist --component llama-server
 cmake -S llama\server --preset hexagon_arm64 -B build\hexagon
 cmake --build build\hexagon --target ggml-hexagon

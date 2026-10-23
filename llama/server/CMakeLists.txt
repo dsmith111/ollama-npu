@@ -628,15 +628,16 @@ if(OLLAMA_RUNNER_DIR)
 else()
     # CPU/base build — install llama-server, llama-quantize + all shared libs + CPU backend modules
     # RUNTIME covers executables and Windows DLLs; LIBRARY covers .so on Linux
-    # llama-perplexity is optional: presets that build it ship it for quality checks.
-    install(TARGETS llama-server llama-quantize llama-perplexity
+    # llama-perplexity and llama-imatrix are optional: presets that build them ship them, for quality
+    # checks and for an importance matrix that calibrates a quantization.
+    install(TARGETS llama-server llama-quantize llama-perplexity llama-imatrix
         RUNTIME DESTINATION ${_base_dest} COMPONENT llama-server OPTIONAL)
     set(_llama_server_base_libs ggml-base ggml llama mtmd)
     if(TARGET llama-common)
         list(APPEND _llama_server_base_libs llama-common)
     endif()
     if(BUILD_SHARED_LIBS)
-        foreach(_impl_lib IN ITEMS llama-server-impl llama-quantize-impl llama-perplexity-impl)
+        foreach(_impl_lib IN ITEMS llama-server-impl llama-quantize-impl llama-perplexity-impl llama-imatrix-impl)
             if(TARGET ${_impl_lib})
                 list(APPEND _llama_server_base_libs ${_impl_lib})
             endif()

@@ -397,8 +397,9 @@ or pass -AllowDirty for a development build, whose version then ends in ".dirty"
     Invoke-Checked $cmake @("-S", "llama\server", "--preset", "cpu_arm64", "-B", $build,
         "-DCMAKE_C_COMPILER=$cc", "-DCMAKE_CXX_COMPILER=$cxx", "-DCMAKE_MAKE_PROGRAM=$ninja",
         "--install-prefix", $stage)
-    # llama-perplexity lets converters measure a GGUF's quality with the packaged runtime.
-    Invoke-Checked $cmake @("--build", $build, "--target", "llama-server", "llama-quantize", "llama-perplexity",
+    # llama-perplexity lets converters measure a GGUF's quality with the packaged runtime, and
+    # llama-imatrix compute the importance matrix that calibrates a quantization.
+    Invoke-Checked $cmake @("--build", $build, "--target", "llama-server", "llama-quantize", "llama-perplexity", "llama-imatrix",
         "--parallel", "$Jobs")
     Invoke-Checked $cmake @("--install", $build, "--component", "llama-server")
     if ($hexagon) {
@@ -503,7 +504,7 @@ or pass -AllowDirty for a development build, whose version then ends in ".dirty"
         $dependencies += [ordered]@{ file = $binary.FullName.Substring($stage.Length + 1); imports = $imports }
     }
     foreach ($required in @("ollama.exe", "lib\ollama\llama-server.exe", "lib\ollama\llama-quantize.exe",
-        "lib\ollama\llama-perplexity.exe", "lib\ollama\ggml-cpu-windows_armv8.0_1.dll",
+        "lib\ollama\llama-perplexity.exe", "lib\ollama\llama-imatrix.exe", "lib\ollama\ggml-cpu-windows_armv8.0_1.dll",
         "lib\ollama\ggml-cpu-windows_armv8.6_1.dll", "lib\ollama\GO_LICENSE",
         "lib\ollama\LLAMA_CPP_VENDORS_LICENSE") + @(if ($hexagon) {
             "lib\ollama\hexagon\ggml-hexagon.dll", "licenses\Hexagon-SDK-headers.txt", "docs\npu_hexagon.md" })) {
